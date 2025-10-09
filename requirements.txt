@@ -1,0 +1,12 @@
+dlib
+face-recognition
+numpy
+Pillow
+mtcnn
+flask
+opencv-python
+imutils
+scikit-learn
+facenet-pytorch
+torch
+torchvision
