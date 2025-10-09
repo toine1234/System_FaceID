@@ -8,5 +8,8 @@ opencv-python
 imutils
 scikit-learn
 facenet-pytorch
+ultralytics
 torch
 torchvision
+pillow
+pandas
