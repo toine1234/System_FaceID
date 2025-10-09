@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Face Recognition Attendance System</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #e3f2fd, #ffffff);
+        }
+        .video-container {
+            max-width: 720px;
+            margin: auto;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+        .header-title {
+            font-weight: bold;
+            color: #0d6efd;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container py-5 text-center">
+    <!-- Tiêu đề -->
+    <h1 class="header-title mb-4"><i class="fa-solid fa-camera-retro"></i> FaceID Camera </h1>
+    <p class="text-muted mb-5">Real-time face recognition through webcam</p>
+
+    <!-- Camera -->
+    <div class="video-container border">
+        <img src="{{ url_for('video_feed') }}" class="img-fluid" alt="Camera Stream">
+    </div>
+</div>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
