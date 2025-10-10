@@ -1,5 +1,6 @@
 # Huấn luyện mô hình nhận dạng
 
+import os
 import yaml
 from ultralytics import YOLO
 
@@ -12,9 +13,10 @@ def create_data_yaml(train_path, val_path, yaml_file = "data.yaml"):
     }
     with open(yaml_file, 'w') as f:
         yaml.dump(data, f)
+    print(f"✅ Data config saved to: {yaml_file}")
     return yaml_file
 
-def train_yolo(yaml_file, model_name="/Users/sarahtruc/Documents/System_FaceID/models/yolov8n-face.pt", epochs=20, imgsz=640, batch=8, lr0=0.001, lrf=0.001, optimizer="AdamW", project_name="yolov8-face"):
+def train_yolo(yaml_file, model_name="models/yolov8n-face.pt", epochs=20, imgsz=640, batch=8, lr0=0.001, lrf=0.001, optimizer="AdamW", project_name="models/face_detector/yolov8n-face"):
     model = YOLO(model_name)
 
     # Train
@@ -26,8 +28,10 @@ def train_yolo(yaml_file, model_name="/Users/sarahtruc/Documents/System_FaceID/m
         lr0=lr0,
         lrf=lrf,
         optimizer=optimizer,
-        project=project_name 
+        project=project_name ,
+        name="train_results"
     )
+    print(f"🎯 Training complete! Results saved in: {project_name}/train_results")
     return model
 
 if __name__ == "__main__":

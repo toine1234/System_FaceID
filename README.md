@@ -9,7 +9,7 @@ Mục tiêu: Tự động điểm danh, quản lý sinh viên và tích hợp v�
 
 FaceID-System/
 │
-├── dataset/                # Dữ liệu gốc (ảnh sinh viên, chia theo folder ID)
+├── dataset/                # Dữ liệu gốc + nhãn YOLO
 │   ├── images/              # chứa ảnh gốc (train/val/test)
 │   │   ├── train/           # ảnh dùng để huấn luyện
 │   │   │   ├── img1.jpg
@@ -30,7 +30,7 @@ FaceID-System/
 │   │   │   └── ...
 │
 │
-├── models/                 # Lưu trữ mô hình đã train
+├── models/                 # Kết quả training (best, result)
 │   ├── face_detector/      # YOLOv8/MTCNN/RetinaFace (dùng để detect)
 │   └── face_recognizer/    # ArcFace/FaceNet đã huấn luyện
 │

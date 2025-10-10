@@ -24,9 +24,6 @@ def convert_box_to_yolo(x1, y1, x2, y2, img_w, img_h):
     return x_center, y_center, box_w, box_h
 
 def auto_label_images(model_path, images_dir, labels_dir, class_id=0, conf_thresh=0.5):
-    """
-    Dùng model YOLOv8-Face để detect khuôn mặt và gán nhãn YOLO.
-    """
     model = YOLO(model_path)
     ensure_dir(labels_dir)
 

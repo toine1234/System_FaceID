@@ -1,6 +1,6 @@
-task: pose
+task: detect
 mode: train
-model: /Users/sarahtruc/Documents/System_FaceID/models/yolov8n-face.pt
+model: models/yolov8n-face.pt
 data: data.yaml
 epochs: 20
 time: null
