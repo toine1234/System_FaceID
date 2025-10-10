@@ -12,8 +12,8 @@ save_period: -1
 cache: false
 device: cpu
 workers: 8
-project: yolov8-face
-name: train
+project: models/face_detector/yolov8n-face
+name: train_results
 exist_ok: false
 pretrained: true
 optimizer: AdamW
@@ -103,4 +103,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: /Users/sarahtruc/Documents/System_FaceID/yolov8-face/train
+save_dir: /Users/sarahtruc/Documents/System_FaceID/models/face_detector/yolov8n-face/train_results
