@@ -1,5 +1,0 @@
-names:
-- face
-nc: 1
-train: dataset/images/train
-val: dataset/images/val
