@@ -10,12 +10,25 @@ Mục tiêu: Tự động điểm danh, quản lý sinh viên và tích hợp v�
 FaceID-System/
 │
 ├── dataset/                # Dữ liệu gốc (ảnh sinh viên, chia theo folder ID)
-│   ├── 12345/              # Mã sinh viên 12345
-│   │   ├── img1.jpg
-│   │   ├── img2.jpg
-│   └── 67890/              # Mã sinh viên 67890
-│       ├── img1.jpg
-│       ├── img2.jpg
+│   ├── images/              # chứa ảnh gốc (train/val/test)
+│   │   ├── train/           # ảnh dùng để huấn luyện
+│   │   │   ├── img1.jpg
+│   │   │   ├── img2.jpg
+│   │   │   └── ...
+│   │   ├── val/   # ảnh dùng để kiểm thử trong lúc train (validation set)
+│   │   │   ├── imgA.jpg
+│   │   │   ├── imgB.jpg
+│   │   │   └── ...
+    ├── labels/ # chứa nhãn (annotations) tương ứng cho từng ảnh
+    │   ├── train/   # file nhãn của ảnh trong images/train
+    │   │   ├── img1.txt
+    │   │   ├── img2.txt
+│   │   │   └── ...
+│   │   ├── val/     # file nhãn của ảnh trong images/val
+│   │   │   ├── imgA.txt
+│   │   │   ├── imgB.txt
+│   │   │   └── ...
+│
 │
 ├── models/                 # Lưu trữ mô hình đã train
 │   ├── face_detector/      # YOLOv8/MTCNN/RetinaFace (dùng để detect)
