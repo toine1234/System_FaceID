@@ -29,7 +29,8 @@ def train_yolo(yaml_file, model_name="models/yolov8n-face.pt", epochs=20, imgsz=
         lrf=lrf,
         optimizer=optimizer,
         project=project_name ,
-        name="train_results"
+        name="train_results",
+        device='cpu'
     )
     print(f"🎯 Training complete! Results saved in: {project_name}/train_results")
     return model
