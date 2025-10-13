@@ -103,4 +103,4 @@ auto_augment: randaugment
 erasing: 0.4
 cfg: null
 tracker: botsort.yaml
-save_dir: /Users/sarahtruc/Documents/System_FaceID/models/face_detector/yolov8n-face/train_results
+save_dir: C:\Users\DELL\Desktop\System_FaceID\models\face_detector\yolov8n-face\train_results

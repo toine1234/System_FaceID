@@ -61,19 +61,19 @@ def parse_annotations(ann_file, img_dir, out_dir):
             idx += 1
 
 if __name__ == "__main__":
-    base = "/Users/sarahtruc/Documents/System_FaceID/dataset_WIDER-FACE"
+    base = "C:/Users/DELL/Desktop/System_FaceID/dataset_WIDER-FACE"
 
     # Convert train
     parse_annotations(
         os.path.join(base, "wider_face_split/wider_face_train_bbx_gt.txt"),
         os.path.join(base, "WIDER_train/images"),
-        "/Users/sarahtruc/Documents/System_FaceID/dataset/labels/train"
+        "C:/Users/DELL/Desktop/System_FaceID/dataset/labels/train"
     )
 
     # Convert val
     parse_annotations(
         os.path.join(base, "wider_face_split/wider_face_val_bbx_gt.txt"),
         os.path.join(base, "WIDER_val/images"),
-        "/Users/sarahtruc/Documents/System_FaceID/dataset/labels/val"
+        "C:/Users/DELL/Desktop/System_FaceID/dataset/labels/val"
     )
     print("✅ Annotation conversion to YOLO format complete.")
