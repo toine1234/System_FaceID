@@ -1,41 +1,75 @@
-# Face Detection + Face Alignment
-
 from ultralytics import YOLO
+from mtcnn import MTCNN
 import cv2
 import numpy as np
 from src.alignment import norm_crop
+
 class FaceDetector:
-    def __init__(self, 
-                 yolo_model_path="models/face_detector/yolov8n-face.pt"):
-        self.model = YOLO(yolo_model_path)
+    def __init__(self, yolo_model_path="models/yolov8n-face.pt"):
+        self.yolo = YOLO(yolo_model_path)
+        self.mtcnn = MTCNN()
+        self.frame_count = 0
 
     def detect_and_align(self, frame):
-        """
-        Phát hiện + căn chỉnh khuôn mặt dùng YOLOv8n-Face + ArcFace alignment
-        Trả về frame có bounding boxes và danh sách khuôn mặt đã căn chỉnh
-        """
-        annotated_frame = frame.copy()
+        self.frame_count += 1
+        annotated = frame.copy()
         aligned_faces = []
 
-        results = self.model(frame, stream=True)
-
+        results = self.yolo(frame, stream=True)
         for r in results:
             boxes = r.boxes.xyxy.cpu().numpy()
-            keypoints = r.keypoints.xy.cpu().numpy() if r.keypoints is not None else None
 
-            for i, box in enumerate(boxes):
+            for box in boxes:
                 x1, y1, x2, y2 = map(int, box[:4])
-                conf = float(box[4]) if len(box) > 4 else 1.0
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-                # Vẽ bounding box
-                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(annotated_frame, f"Unknown", (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                # chỉ chạy MTCNN mỗi 3 frame
+                if self.frame_count % 3 != 0:
+                    continue
 
-                if keypoints is not None and i < len(keypoints):
-                    lmk = keypoints[i].astype(np.float32)
-                    if lmk.shape == (5, 2):
-                        aligned = norm_crop(frame, lmk, image_size=112, mode="arcface")
-                        aligned_faces.append(aligned)
+                crop = frame[y1:y2, x1:x2]
+                if crop.size == 0:
+                    continue
 
-        return annotated_frame, aligned_faces
+                rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                detections = self.mtcnn.detect_faces(rgb_crop)
+                if not detections:
+                    continue
+
+                keypoints = detections[0]['keypoints']
+                lmk = np.array([
+                    [keypoints['left_eye'][0] + x1, keypoints['left_eye'][1] + y1],
+                    [keypoints['right_eye'][0] + x1, keypoints['right_eye'][1] + y1],
+                    [keypoints['nose'][0] + x1, keypoints['nose'][1] + y1],
+                    [keypoints['mouth_left'][0] + x1, keypoints['mouth_left'][1] + y1],
+                    [keypoints['mouth_right'][0] + x1, keypoints['mouth_right'][1] + y1]
+                ], dtype=np.float32)
+
+                for (x, y) in lmk:
+                    cv2.circle(annotated, (int(x), int(y)), 2, (0, 0, 255), -1)
+
+        return annotated, aligned_faces
+    
+# if __name__ == "__main__":
+#     cap = cv2.VideoCapture(0)
+#     detector = FaceDetector()
+
+#     while True:
+#         ret, frame = cap.read()
+#         if not ret:
+#             break
+
+#         annotated, aligned_faces = detector.detect_and_align(frame)
+
+#         # Cửa sổ 1: khung hình có landmark
+#         cv2.imshow("YOLOv8n-Face + Landmark", annotated)
+
+#         # Cửa sổ 2: khuôn mặt đã căn chỉnh
+#         if len(aligned_faces) > 0:
+#             cv2.imshow("Aligned Face", aligned_faces[0])
+
+#         if cv2.waitKey(1) & 0xFF == ord('q'):
+#             break
+
+#     cap.release()
+#     cv2.destroyAllWindows()
