@@ -4,7 +4,7 @@ from src.face_detect import FaceDetector
 
 app = Flask(__name__)
 
-detector = FaceDetector("models/face_detector/yolov8n-face/train_results/weights/best.pt")
+detector = FaceDetector("models/yolov8n-face.pt")
 
 def generate_frame():
     cap = cv2.VideoCapture(0)
@@ -13,9 +13,11 @@ def generate_frame():
         if not success:
             break
 
-        frame = detector.detect_faces(frame)
+        frame,aligned_faces = detector.detect_and_align(frame)
+
         success, buffer = cv2.imencode('.jpg', frame)
         frame = buffer.tobytes()
+        
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
@@ -27,6 +29,7 @@ def index():
 def video_feed():
     return Response(generate_frame(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
 
 if __name__ == '__main__':
     app.run(debug = True, port=5001)

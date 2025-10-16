@@ -17,3 +17,4 @@ omegaconf
 deepface
 deepface
 onnxruntime
+insightface
