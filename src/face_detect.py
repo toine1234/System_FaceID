@@ -1,50 +1,41 @@
+# Face Detection + Face Alignment
+
 from ultralytics import YOLO
 import cv2
-from mtcnn.mtcnn import MTCNN
 import numpy as np
-
+from src.alignment import norm_crop
 class FaceDetector:
-    def __init__(self, model_path="models/face_detector/yolov8n-face/train_results/weights/best.pt"):
-        self.model = YOLO(model_path)
-        self.aligner = MTCNN()
+    def __init__(self, 
+                 yolo_model_path="models/face_detector/yolov8n-face.pt"):
+        self.model = YOLO(yolo_model_path)
 
-    def detect_faces(self, frame):
-        boxes = []
-        results = self.model(frame, stream = True)
-        for r in results:
-            boxes = r.boxes.xyxy
-            for box in boxes:
-                x1, y1, x2, y2 = map(int, box[:4])
-                boxes.append((x1, y1, x2, y2))
-        return boxes
-    
-    def align_face(self, face_img):
-        detections = self.aligner.detect_faces(face_img)
-        if len(detections) == 0:
-            return face_img
-        keypoints = detections[0]['keypoints']
-        left_eye = keypoints['left_eye']
-        right_eye = keypoints['right_eye']
-
-        # Góc lệch giữa 2 mắt
-        dx, dy = right_eye[0] - left_eye[0], right_eye[1] - left_eye[1]
-        angle = np.degrees(np.arctan2(dy, dx))
-
-        # Xoay ảnh để 2 mắt nằm ngang
-        center = ((face_img.shape[1] // 2), (face_img.shape[0] // 2))
-        M = cv2.getRotationMatrix2D(center, angle, 1.0)
-        aligned_face = cv2.warpAffine(face_img, M, (face_img.shape[1], face_img.shape[0]))
-        return aligned_face
-    
-    def detec_and_align(self, frame):
-        boxes = self.detect_faces(frame)
+    def detect_and_align(self, frame):
+        """
+        Phát hiện + căn chỉnh khuôn mặt dùng YOLOv8n-Face + ArcFace alignment
+        Trả về frame có bounding boxes và danh sách khuôn mặt đã căn chỉnh
+        """
+        annotated_frame = frame.copy()
         aligned_faces = []
-        for (x1, y1, x2, y2) in boxes:
-            face_crop = frame[y1:y2, x1:x2]
-            aligned_face = self.align_face(face_crop)
-            aligned_faces.append(aligned_face)
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, "Unknown", (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-        return aligned_faces, frame
+        results = self.model(frame, stream=True)
+
+        for r in results:
+            boxes = r.boxes.xyxy.cpu().numpy()
+            keypoints = r.keypoints.xy.cpu().numpy() if r.keypoints is not None else None
+
+            for i, box in enumerate(boxes):
+                x1, y1, x2, y2 = map(int, box[:4])
+                conf = float(box[4]) if len(box) > 4 else 1.0
+
+                # Vẽ bounding box
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(annotated_frame, f"Unknown", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+                if keypoints is not None and i < len(keypoints):
+                    lmk = keypoints[i].astype(np.float32)
+                    if lmk.shape == (5, 2):
+                        aligned = norm_crop(frame, lmk, image_size=112, mode="arcface")
+                        aligned_faces.append(aligned)
+
+        return annotated_frame, aligned_faces
