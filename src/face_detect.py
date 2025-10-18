@@ -24,44 +24,40 @@ class FaceDetector:
             - annotated: frame có vẽ khung + landmark
             - aligned_faces: [(face_img, (x1, y1, x2, y2))]
         """
+        self.frame_count += 1
         annotated = frame.copy()
         aligned_faces = []
 
-        results = self.yolo(frame, stream=True)
+        # 1️⃣ Phát hiện khuôn mặt
+        results = self.yolo(frame, imgsz=384, stream=True)
         for r in results:
             boxes = r.boxes.xyxy.cpu().numpy()
 
             for box in boxes:
                 x1, y1, x2, y2 = map(int, box[:4])
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                # Cắt khuôn mặt từ ảnh gốc
                 face_crop = frame[y1:y2, x1:x2]
+
                 if face_crop.size == 0:
                     continue
 
-                aligned = face_crop  # mặc định nếu không alignment được
+                # 2️⃣ Căn chỉnh chỉ mỗi 3 frame
+                if self.frame_count % 3 == 0:
+                    try:
+                        _, _, points = self.mtcnn.detect(face_crop, landmarks=True)
+                        if points is not None:
+                            landmark = np.array(points[0], dtype=np.float32)
+                            aligned = norm_crop(face_crop, landmark)
+                            for (lx, ly) in landmark:
+                                cv2.circle(annotated, (int(x1 + lx), int(y1 + ly)), 2, (0, 0, 255), -1)
+                        else:
+                            aligned = face_crop
+                    except Exception as e:
+                        print(f"[WARN] alignment error: {e}")
+                        aligned = face_crop
+                else:
+                    aligned = face_crop
 
-                try:
-                    # MTCNN detect landmark (đã resize nội bộ)
-                    _, _, points = self.mtcnn.detect(face_crop, landmarks=True)
-
-                    if points is not None and len(points) > 0:
-                        landmark = np.array(points[0], dtype=np.float32)
-
-                        # Căn chỉnh theo ArcFace chuẩn 112x112
-                        aligned = norm_crop(face_crop, landmark)
-
-                        # Vẽ landmark lên ảnh hiển thị
-                        for (lx, ly) in landmark:
-                            cv2.circle(annotated, (int(x1 + lx), int(y1 + ly)), 2, (0, 0, 255), -1)
-
-                    else:
-                        print("[WARN] ❌ Không tìm thấy landmark, dùng crop gốc.")
-
-                except Exception as e:
-                    print(f"[WARN] ⚠️ Lỗi alignment MTCNN: {e}")
-
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 aligned_faces.append((aligned, (x1, y1, x2, y2)))
 
         return annotated, aligned_faces
