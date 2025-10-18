@@ -23,7 +23,7 @@ class FaceRecognizer:
         - pretrained_model: 'vggface2' hoặc 'casia-webface'
         """
         if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            device = "mps" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
 
         self.model = InceptionResnetV1(pretrained=pretrained_model).eval().to(self.device)
