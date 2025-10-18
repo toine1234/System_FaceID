@@ -18,3 +18,4 @@ deepface
 deepface
 onnxruntime
 insightface
+retina-face
