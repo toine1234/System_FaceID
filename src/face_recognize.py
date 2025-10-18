@@ -16,12 +16,15 @@ from facenet_pytorch import InceptionResnetV1
 
 
 class FaceRecognizer:
-    def __init__(self, device: str = None, pretrained_model: str = "vggface2"):
+    def __init__(self, device: str = None, pretrained_model: str = "vggface2", embedding_path="encodings/embeddings.pkl"):
         """
         Khởi tạo mô hình trích xuất embedding FaceNet (InceptionResnetV1)
         - device: 'cpu' hoặc 'cuda'
         - pretrained_model: 'vggface2' hoặc 'casia-webface'
         """
+        self.embedding_path = embedding_path
+
+
         if device is None:
             device = "mps" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
@@ -110,13 +113,13 @@ class FaceRecognizer:
     # 3️⃣ NHẬN DẠNG KHUÔN MẶT
     # ============================================================
     @staticmethod
-    def load_embeddings(path="encodings/embeddings.pkl"):
+    def load_embeddings(self):
         """Đọc file embeddings.pkl"""
-        if not os.path.exists(path):
+        if not os.path.exists(self.embedding_path):
             raise FileNotFoundError(f"Không tìm thấy file: {path}")
-        with open(path, "rb") as f:
+        with open(self.embedding_path, "rb") as f:
             data = pickle.load(f)
-        return data
+        return np.array(data["labels"]), np.array(data["embeddings"], dtype=np.float32)
 
     @staticmethod
     def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
