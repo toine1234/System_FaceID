@@ -8,7 +8,6 @@ opencv-python
 imutils
 scikit-learn
 facenet-pytorch
-ultralytics
 torch
 torchvision
 pillow
@@ -19,3 +18,4 @@ deepface
 onnxruntime
 insightface
 retina-face
+ultralytics==8.3.50
