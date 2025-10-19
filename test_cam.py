@@ -1,40 +1,36 @@
 import cv2
-from test import FaceDetector
-from src.face_recognize import FaceRecognizer
+from src.face_detect import FaceDetector
 
-def main():
-    # 1️⃣ Khởi tạo detector & recognizer
-    detector = FaceDetector(device="mps")  # hoặc "cuda", "cpu"
-    recognizer = FaceRecognizer(device="mps")
+# --- Khởi tạo đối tượng ---
+# Nếu bạn đang dùng RetinaFace: đảm bảo file face_detect.py có import từ insightface.app
+detector = FaceDetector(
+    yolo_model_path="models/yolov8n-face.pt",
+    device="cpu"  # 'mps' cho Mac M1/M2/M4, hoặc 'cpu' nếu chưa hỗ trợ
+)
 
-    # 2️⃣ Mở webcam
-    cap = cv2.VideoCapture(0)
-    print("[INFO] Đang mở webcam... Nhấn 'q' để thoát.")
+# --- Mở webcam ---
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("❌ Không thể mở webcam!")
+    exit()
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+print("✅ Webcam đã sẵn sàng. Nhấn 'q' để thoát.")
 
-        # 3️⃣ Phát hiện + căn chỉnh
-        annotated, aligned_faces = detector.detect_and_align(frame)
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("❌ Không nhận được khung hình.")
+        break
 
-        # 4️⃣ Nhận dạng từng khuôn mặt
-        for face_img, (x1, y1, x2, y2) in aligned_faces:
-            emb = recognizer.get_embedding(face_img)
-            label, score = recognizer.recognize_face(emb, threshold=0.7)
-            cv2.putText(annotated, f"{label} ({score:.2f})", (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    # --- Gọi hàm detect_and_align ---
+    annotated, aligned_faces = detector.detect_and_align(frame)
 
-        cv2.imshow("Face Recognition - YOLO + RetinaFace", annotated)
+    # --- Hiển thị kết quả ---
+    cv2.imshow("Face Detection Test", annotated)
 
-        # 5️⃣ Thoát khi nhấn 'q'
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    # --- Thoát ---
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-    cap.release()
-    cv2.destroyAllWindows()
-
-
-if __name__ == "__main__":
-    main()
+cap.release()
+cv2.destroyAllWindows()
