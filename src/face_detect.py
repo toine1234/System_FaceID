@@ -3,8 +3,6 @@ from facenet_pytorch import MTCNN
 from src.alignment import norm_crop
 import cv2
 import numpy as np
-from insightface.app import FaceAnalysis
-
 
 
 class FaceDetector:
