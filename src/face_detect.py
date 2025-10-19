@@ -1,137 +1,180 @@
-# from ultralytics import YOLO
-# from facenet_pytorch import MTCNN
-# from src.alignment import norm_crop
-# import cv2
-# import numpy as np
-
-
-# class FaceDetector:
-#     def __init__(self, yolo_model_path="models/yolov8n-face.pt", device="cpu"):
-#         self.yolo = YOLO(yolo_model_path)
-#         self.mtcnn = MTCNN(keep_all=True, device=device)
-#         self.device = device
-#         self.frame_count = 0
-
-
-#     def detect_and_align(self, frame):
-#         self.frame_count += 1
-#         annotated = frame.copy()
-#         aligned_faces = []
-
-#         # --- Phát hiện khuôn mặt bằng YOLO ---
-#         results = self.yolo(frame, imgsz=384, conf=0.5, iou=0.45, verbose=False, stream=True)
-#         for r in results:
-#             boxes = r.boxes.xyxy.cpu().numpy()
-
-#             for box in boxes:
-#                 x1, y1, x2, y2 = map(int, box[:4])
-#                 face_crop = frame[y1:y2, x1:x2]
-#                 if face_crop.size == 0:
-#                     continue
-
-#                 # --- MTCNN Landmark ---
-#                 try:
-#                     _, _, points = self.mtcnn.detect(face_crop, landmarks=True)
-#                     if points is not None and len(points) > 0:
-#                         landmark = np.array(points[0], dtype=np.float32)
-
-#                         # --- Căn chỉnh bằng ArcFace norm_crop ---
-#                         aligned = norm_crop(face_crop, landmark, image_size=112)
-
-#                         # Vẽ bounding box & landmark lên frame
-#                         cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-#                         for (lx, ly) in landmark:
-#                             cv2.circle(annotated, (int(x1 + lx), int(y1 + ly)), 2, (0, 0, 255), -1)
-
-#                         aligned_faces.append((aligned, (x1, y1, x2, y2)))
-
-#                     else:
-#                         print("[WARN] Không tìm thấy landmark, dùng crop gốc.")
-#                         aligned_faces.append((cv2.resize(face_crop, (112, 112)), (x1, y1, x2, y2)))
-
-#                 except Exception as e:
-#                     print(f"[WARN] lỗi alignment: {e}")
-#                     aligned_faces.append((cv2.resize(face_crop, (112, 112)), (x1, y1, x2, y2)))
-
-#         return annotated, aligned_faces
-
-
+import cv2
+import numpy as np
+import time
+import torch
+import warnings
 from ultralytics import YOLO
 from insightface.app import FaceAnalysis
-from src.alignment import norm_crop
-import cv2, numpy as np
+from insightface.utils import face_align
+
 
 class FaceDetector:
-    def __init__(self, yolo_model_path="models/yolov8n-face.pt", device="mps"):
-        self.yolo = YOLO(yolo_model_path)
-        self.device = device
+    def __init__(self, yolo_model_path="/Users/sarahtruc/Documents/System_FaceID/models/yolov11n-face.pt", device=None):
+        #Thiết bị
+        if device is None:
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
+        else:
+            self.device = device
+        print(f"[INFO] FaceDetector initialized on device: {self.device}")
 
-        # RetinaFace nhẹ hơn (320x320)
-        self.face_app = FaceAnalysis(name="buffalo_l")
-        ctx_id = 0 if device != "cpu" else -1
-        self.face_app.prepare(ctx_id=ctx_id, det_size=(320, 320))
+        #YOLOv11 (detection)
+        try:
+            self.yolo = YOLO(yolo_model_path)
+            print(f"[INFO] YOLOv11 model loaded successfully: {yolo_model_path}")
+        except Exception as e:
+            raise RuntimeError(f"[ERROR] Cannot load YOLO model: {e}")
 
+        #RetinaFace (buffalo_l) — chỉ bật detection + landmark 3D
+        self.face_app = FaceAnalysis(
+            name="buffalo_l",
+            allowed_modules=["detection", "landmark_3d_68"]
+        )
+        # Giảm kích thước input để tăng FPS (480x480)
+        self.face_app.prepare(ctx_id=0, det_size=(480, 480))
+        print("[INFO] RetinaFace (buffalo_l) initialized with 3D landmarks (480×480)")
+
+        #Biến trạng thái
         self.frame_count = 0
         self.retina_faces = []
+        self.start_time = time.time()
 
+    # ------------------------------------------------------------
+    def _iou(self, boxA, boxB):
+        """Tính IoU giữa 2 hộp"""
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
+        inter = max(0, xB - xA) * max(0, yB - yA)
+        areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+        areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+        return inter / float(areaA + areaB - inter + 1e-6)
+
+    # ------------------------------------------------------------
     def detect_and_align(self, frame):
+        """Phát hiện YOLO và căn chỉnh RetinaFace 3D"""
         self.frame_count += 1
         annotated = frame.copy()
         aligned_faces = []
 
-        # --- Chạy RetinaFace mỗi 5 frame ---
+        #RetinaFace mỗi 5 frame để giảm tải CPU
         if self.frame_count % 5 == 0:
-            self.retina_faces = self.face_app.get(frame)
-
+            faces = self.face_app.get(frame)
+            # Giữ những mặt confidence cao
+            self.retina_faces = [f for f in faces if getattr(f, "det_score", 0) > 0.7]
         retina_faces = getattr(self, "retina_faces", [])
 
-        # --- YOLOv8n-Face ---
-        results = self.yolo(frame, imgsz=256, conf=0.5, iou=0.45, verbose=False, stream=True)
-        for r in results:
-            boxes = r.boxes.xyxy.cpu().numpy()
+        # YOLOv11
+        results = self.yolo(frame, verbose=False)
+        if not results:
+            return annotated, aligned_faces
+        boxes = results[0].boxes
+        if boxes is None or boxes.shape[0] == 0:
+            return annotated, aligned_faces
 
-            for box in boxes:
-                x1, y1, x2, y2 = map(int, box[:4])
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        xyxy = boxes.xyxy.cpu().numpy().astype(int)
+        for (x1, y1, x2, y2) in xyxy:
+            box_yolo = [x1, y1, x2, y2]
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-                found = False
-                for face in retina_faces:
-                    bx1, by1, bx2, by2 = face.bbox.astype(int)
-                    if (bx1 >= x1 - 15 and by1 >= y1 - 15 and bx2 <= x2 + 15 and by2 <= y2 + 15):
-                        kps = face.kps.astype(np.float32)
-                        aligned = norm_crop(frame, kps, image_size=112)
+            # Chọn mặt Retina trùng YOLO cao nhất theo IoU
+            best_face, best_iou = None, 0
+            for face in retina_faces:
+                bx1, by1, bx2, by2 = face.bbox.astype(int)
+                iou = self._iou(box_yolo, [bx1, by1, bx2, by2])
+                if iou > best_iou:
+                    best_face, best_iou = face, iou
 
-                        # vẽ landmark (tùy chọn)
-                        for (lx, ly) in kps:
-                            cv2.circle(annotated, (int(lx), int(ly)), 2, (0, 0, 255), -1)
+            if best_face is not None and best_iou > 0.3:
+                face = best_face
 
-                        aligned_faces.append((aligned, (x1, y1, x2, y2)))
-                        found = True
-                        break
+                # Landmark 3D ưu tiên
+                if hasattr(face, "landmark_3d_68") and face.landmark_3d_68 is not None:
+                    lmk3d = face.landmark_3d_68
+                    kps_3d = np.array([
+                        lmk3d[30],  # mũi
+                        lmk3d[36],  # mắt trái
+                        lmk3d[45],  # mắt phải
+                        lmk3d[48],  # mép trái
+                        lmk3d[54],  # mép phải
+                    ], dtype=np.float32)
+                    kps_2d = kps_3d[:, :2]
 
-                if not found:
+                    # 🧠 Alignment 3D chính xác hơn
+                    try:
+                        aligned = face_align.norm_crop_with_landmark(frame, landmark=kps_2d, image_size=112)
+                    except Exception:
+                        aligned = face_align.norm_crop(frame, landmark=kps_2d, image_size=112)
+
+                    # 🎨 Vẽ landmark 3D với màu vàng rõ nét
+                    for i, (lx, ly, _) in enumerate(lmk3d.astype(int)):
+                        if i in range(36, 42):       # mắt trái
+                            color = (0, 255, 0)
+                        elif i in range(42, 48):     # mắt phải
+                            color = (255, 0, 0)
+                        elif i in range(48, 68):     # miệng
+                            color = (0, 255, 255)
+                        else:
+                            color = (200, 200, 200)
+                        cv2.circle(annotated, (lx, ly), 2, color, -1)
+
+                elif hasattr(face, "kps") and face.kps is not None:
+                    kps = face.kps.astype(np.float32)
+                    aligned = face_align.norm_crop(frame, landmark=kps, image_size=112)
+                    for (lx, ly) in kps.astype(int):
+                        cv2.circle(annotated, (lx, ly), 3, (0, 0, 255), -1)
+                else:
                     face_crop = frame[y1:y2, x1:x2]
-                    if face_crop.size > 0:
-                        aligned_faces.append((cv2.resize(face_crop, (112, 112)), (x1, y1, x2, y2)))
+                    aligned = cv2.resize(face_crop, (112, 112))
+
+                aligned_faces.append((aligned, (x1, y1, x2, y2)))
+
+            else:
+                face_crop = frame[y1:y2, x1:x2]
+                if face_crop.size > 0:
+                    aligned_faces.append((cv2.resize(face_crop, (112, 112)), (x1, y1, x2, y2)))
+
+        # Log FPS
+        if self.frame_count % 30 == 0:
+            elapsed = time.time() - self.start_time
+            fps = self.frame_count / elapsed
+            print(f"[INFO] Processed {self.frame_count} frames ({fps:.2f} FPS)")
 
         return annotated, aligned_faces
 
+if __name__ == "__main__":
+    print("[TEST] Running optimized FaceDetector (YOLOv11 + RetinaFace 3D)...")
 
-# if __name__ == "__main__":
-#     detector = FaceDetector(device="mps")  # hoặc "cpu"
-#     cap = cv2.VideoCapture(0)
+    detector = FaceDetector(
+        yolo_model_path="/Users/sarahtruc/Documents/System_FaceID/models/yolov11n-face.pt",
+        device="mps"
+    )
 
-#     while True:
-#         ret, frame = cap.read()
-#         if not ret:
-#             break
+    cap = cv2.VideoCapture(0)
+    cap.set(3, 640)   # độ phân giải đầu vào
+    cap.set(4, 480)
 
-#         annotated, aligned_faces = detector.detect_and_align(frame)
-#         cv2.imshow("Optimized YOLO + RetinaFace", annotated)
+    if not cap.isOpened():
+        print("❌ Không thể mở webcam!")
+        exit()
 
-#         if cv2.waitKey(1) & 0xFF == ord('q'):
-#             break
+    print("[INFO] Nhấn 'q' để thoát chương trình...")
 
-#     cap.release()
-#     cv2.destroyAllWindows()
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
+        annotated, aligned_faces = detector.detect_and_align(frame)
+        cv2.imshow("YOLOv11 + RetinaFace 3D (Optimized)", annotated)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()

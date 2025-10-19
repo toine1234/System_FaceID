@@ -7,6 +7,7 @@ Cấu trúc dataset:
 """
 
 import os
+import cv2
 import pickle
 import numpy as np
 import torch
@@ -16,7 +17,7 @@ from facenet_pytorch import InceptionResnetV1
 
 
 class FaceRecognizer:
-    def __init__(self, device: str = None, pretrained_model: str = "vggface2"):
+    def __init__(self, device: str = None, pretrained_model: str = "vggface2", embeddings_path="encodings/embeddings.pkl"):
         """
         Khởi tạo mô hình trích xuất embedding FaceNet (InceptionResnetV1)
         - device: 'cpu' hoặc 'cuda'
@@ -45,7 +46,6 @@ class FaceRecognizer:
         """
         Trích xuất embedding (512D) từ ảnh khuôn mặt BGR numpy.
         """
-        import cv2
         rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         pil_img = Image.fromarray(rgb)
         tensor = self.preprocess_image(pil_img)
