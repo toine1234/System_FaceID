@@ -17,7 +17,7 @@ class FaceDetector:
         device=None,
         yolo_imgsz=448,
         yolo_conf=0.45,
-        retina_det_size=(320, 320),
+        retina_det_size=(640, 640),
         retina_skip=8,
         retina_conf=0.7,
     ):
