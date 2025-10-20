@@ -13,7 +13,7 @@ from insightface.utils import face_align
 class FaceDetector:
     def __init__(
         self,
-        yolo_model_path="/Users/sarahtruc/Documents/System_FaceID/models/yolov11n-face.pt",
+        yolo_model_path="models/yolov11n-face.pt",
         device=None,
         yolo_imgsz=448,
         yolo_conf=0.45,
@@ -21,6 +21,11 @@ class FaceDetector:
         retina_skip=8,
         retina_conf=0.7,
     ):
+        # Ẩn warning không cần thiết
+        warnings.filterwarnings("ignore", category=UserWarning, module="onnxruntime")
+        warnings.filterwarnings("ignore", category=UserWarning, module="ultralytics")
+        ort.set_default_logger_severity(3)  # Ẩn log onnxruntime
+
         # --------- Thiết bị ----------
         if device is None:
             if torch.cuda.is_available():
@@ -31,9 +36,11 @@ class FaceDetector:
                 self.device = "cpu"
         else:
             self.device = device
-        print(f"[INFO] FaceDetector initialized on {self.device}")
+        print(f"[INIT] FaceDetector initialized on {self.device}")
 
         # --------- YOLOv11 ----------
+        if not os.path.exists(yolo_model_path):
+            raise FileNotFoundError(f"❌ Không tìm thấy model YOLO: {yolo_model_path}")
         self.yolo = YOLO(yolo_model_path)
         try:
             self.yolo.fuse()
@@ -41,7 +48,7 @@ class FaceDetector:
             pass
         self.yolo_imgsz = yolo_imgsz
         self.yolo_conf = yolo_conf
-        print(f"[INFO] Loaded YOLOv11 model: {yolo_model_path}")
+        print(f"[INFO] YOLOv11 loaded: {os.path.basename(yolo_model_path)}")
 
         # --------- RetinaFace + 3D landmarks ----------
         ctx_id = 0 if self.device != "cpu" else -1
@@ -50,7 +57,7 @@ class FaceDetector:
             allowed_modules=["detection", "landmark_3d_68"]
         )
         self.face_app.prepare(ctx_id=ctx_id, det_size=retina_det_size)
-        print(f"[INFO] RetinaFace initialized (3D landmarks, det_size={retina_det_size})")
+        print(f"[INFO] RetinaFace 3D landmarks ready (det_size={retina_det_size})")
 
         # --------- Trạng thái / cache ----------
         self.frame_count = 0
@@ -73,7 +80,6 @@ class FaceDetector:
 
     @staticmethod
     def _draw_landmarks_3d(canvas, lmk3d):
-        # màu nhấn mạnh nhóm vùng: mắt trái (36-41), mắt phải (42-47), miệng (48-67)
         lmk = lmk3d.astype(int)
         for i, (x, y, _) in enumerate(lmk):
             if 36 <= i <= 41:
@@ -152,18 +158,17 @@ class FaceDetector:
             aligned_faces.append((aligned, (x1, y1, x2, y2)))
 
         # Tính FPS mượt (EMA)
-        if self.frame_count % 10 == 0:
+        if self.frame_count % 15 == 0:  # giảm tần suất log FPS
             elapsed = time.time() - self.start_time
             fps_now = self.frame_count / max(1e-6, elapsed)
-            self.smooth_fps = fps_now if self.smooth_fps == 0 else (0.8 * self.smooth_fps + 0.2 * fps_now)
-            print(f"[INFO] {self.frame_count} frames | {self.smooth_fps:.1f} FPS")
+            self.smooth_fps = fps_now if self.smooth_fps == 0 else (0.85 * self.smooth_fps + 0.15 * fps_now)
+            print(f"[FPS] {self.smooth_fps:.1f}")
 
         # Vẽ FPS lên khung hình
         fps_text = f"FPS: {self.smooth_fps:.1f}" if self.smooth_fps else "FPS: warmup"
         cv2.putText(annotated, fps_text, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (40, 255, 40), 2, cv2.LINE_AA)
 
         return annotated, aligned_faces
-
 
 # def run_realtime():
 #     print("[TEST] Running FaceDetector – YOLOv11 + RetinaFace 3D (Async/MPS)")

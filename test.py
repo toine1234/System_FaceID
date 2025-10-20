@@ -1,81 +1,126 @@
 """
-app.py - Flask API realtime nhận dạng khuôn mặt
-Tác giả: Thanh Trúc (2025)
+test.py - Nhận dạng khuôn mặt thời gian thực với YOLOv11 + InsightFace ArcFace
+Tác giả: DihTris & Thanh Trúc (2025)
 """
 
 from flask import Flask, render_template, Response
 import cv2
-from src.f import FaceDetector
-from src.face_recognize import FaceRecognizer
+import torch
+import platform
+import warnings
+import os
+import logging
+import sys
+from contextlib import contextmanager
+
+# Ẩn cảnh báo FutureWarning trong InsightFace
+warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
 
 # ================================================================
-# 1️⃣ Khởi tạo Flask app
+# 🧹 Ẩn các log không cần thiết (ONNXRuntime, Ultralytics, InsightFace)
+# ================================================================
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["INSIGHTFACE_LOG_LEVEL"] = "ERROR"
+os.environ["ULTRALYTICS_IGNORE_ERRORS"] = "1"
+
+logging.getLogger("insightface").setLevel(logging.ERROR)
+logging.getLogger("onnxruntime").setLevel(logging.ERROR)
+logging.getLogger("ultralytics").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# Context manager để tạm thời tắt in ra console
+@contextmanager
+def suppress_stdout():
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        sys.stdout = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
+
+
+# ================================================================
+# 1️⃣ Khởi tạo Flask App & Model
 # ================================================================
 app = Flask(__name__)
 
-# ================================================================
-# 2️⃣ Khởi tạo mô hình
-# ================================================================
-print("[INIT] Loading models...")
+print("\n[KHỞI TẠO] Đang tải mô hình...")
 
-detector = FaceDetector(
-    yolo_model_path="models/yolov11n-face.pt",
-    device="mps"
-)
-recognizer = FaceRecognizer(
-    device="mps",
-    pretrained_model="vggface2",
-    embeddings_path="encodings/embeddings.pkl"
-)
+# --- Tự động chọn thiết bị ---
+if torch.cuda.is_available():
+    device = "cuda"
+elif platform.system() == "Darwin" and torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
+print(f"[THIẾT BỊ] Đã chọn: {device.upper()}")
 
-print("[READY] Models loaded successfully!")
+# --- Import các module mô hình ---
+from src.face_detect import FaceDetector
+from src.face_recognize import FaceRecognizer
+
+# --- Load mô hình (ẩn log InsightFace) ---
+with suppress_stdout():
+    detector = FaceDetector(
+        yolo_model_path="models/yolov11n-face.pt",
+        device=device
+    )
+    recognizer = FaceRecognizer(
+        device=device,
+        db_path="encodings/embeddings.pkl",
+        threshold=0.6
+    )
+
+print("[SẴN SÀNG] ✅ Mô hình đã được tải thành công!\n")
+
 
 # ================================================================
-# 3️⃣ Hàm xử lý luồng video
+# 2️⃣ Xử lý video thời gian thực
 # ================================================================
 def generate_frame():
     cap = cv2.VideoCapture(0)
     cap.set(3, 640)
     cap.set(4, 480)
+    if not cap.isOpened():
+        print("❌ Không thể mở webcam.")
+        return
 
+    frame_count = 0
     while True:
         success, frame = cap.read()
         if not success:
             break
+        frame_count += 1
 
-        # 1️⃣ Phát hiện + căn chỉnh khuôn mặt
-        frame, faces = detector.detect_and_align(frame)
+        # 1️⃣ Phát hiện và căn chỉnh khuôn mặt
+        annotated, faces = detector.detect_and_align(frame)
 
         # 2️⃣ Nhận dạng từng khuôn mặt
-        for face_img, (x1, y1, x2, y2) in faces:
+        for aligned_face, (x1, y1, x2, y2) in faces:
             try:
-                emb = recognizer.get_embedding(face_img)
-                label, score = recognizer.recognize_face(emb, threshold=0.7)
-
-                text = f"{label} ({score*100:.1f}%)" if label != "Unknown" else "Unknown"
+                label, score = recognizer.recognize(aligned_face)
+                text = f"{label} ({score*100:.1f}%)" if label != "Unknown"  else "Unknown"
                 color = (0, 255, 0) if label != "Unknown" else (0, 0, 255)
-
-                # Vẽ khung + nhãn
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, text, (x1, y1 - 10),
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(annotated, text, (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
-            except Exception as e:
-                print(f"[WARN] Lỗi nhận dạng: {e}")
+            except Exception:
                 continue
 
-        # 3️⃣ Encode frame
-        ret, buffer = cv2.imencode('.jpg', frame)
+        # 3️⃣ Mã hóa khung hình JPEG để stream
+        ret, buffer = cv2.imencode('.jpg', annotated)
         if not ret:
             continue
-        frame = buffer.tobytes()
-
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        frame_bytes = buffer.tobytes()
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
     cap.release()
 
+
 # ================================================================
-# 4️⃣ Flask Routes
+# 3️⃣ Định nghĩa các route Flask
 # ================================================================
 @app.route('/')
 def index():
@@ -86,9 +131,11 @@ def video_feed():
     return Response(generate_frame(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
+
 # ================================================================
-# 5️⃣ Main
+# 4️⃣ Chạy server Flask
 # ================================================================
 if __name__ == '__main__':
-    print("[RUNNING] Flask FaceID server started at http://127.0.0.1:5001/")
-    app.run(debug=True, port=5001)
+    print("[CHẠY] 🚀 Server Flask FaceID đã khởi động tại: http://127.0.0.1:5001/")
+    print("[THÔNG BÁO] Nhấn CTRL + C để dừng.\n")
+    app.run(debug=False, port=5001)
