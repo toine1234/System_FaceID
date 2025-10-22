@@ -138,4 +138,8 @@ def video_feed():
 if __name__ == '__main__':
     print("[CHẠY] 🚀 Server Flask FaceID đã khởi động tại: http://127.0.0.1:5001/")
     print("[THÔNG BÁO] Nhấn CTRL + C để dừng.\n")
+<<<<<<< HEAD
     app.run(debug=False, port=5001)
+=======
+    app.run(debug=False, port=5001)
+>>>>>>> 052c681a0ba6e09aa5ca67ded8d1911c675b54bb

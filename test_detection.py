@@ -1,4 +1,11 @@
 
+<<<<<<< HEAD
+=======
+
+
+
+
+>>>>>>> 052c681a0ba6e09aa5ca67ded8d1911c675b54bb
 # from ultralytics import YOLO
 # from facenet_pytorch import MTCNN
 # from src.alignment import norm_crop
@@ -136,6 +143,7 @@ class FaceDetector:
 #     cap.release()
 #     cv2.destroyAllWindows()
 
+<<<<<<< HEAD
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # Fix import path
@@ -317,3 +325,5 @@ class ArcFaceRecognizerONNX:
         with open(self.db_path, "wb") as f:
             pickle.dump({"labels": self.labels, "embeddings": self.embeddings}, f)
         print(f"[SAVE] Database saved -> {self.db_path}")
+=======
+>>>>>>> 052c681a0ba6e09aa5ca67ded8d1911c675b54bb
