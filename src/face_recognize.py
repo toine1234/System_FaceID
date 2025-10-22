@@ -197,8 +197,6 @@ class FaceRecognizer:
             except Exception:
                 label, score = "Unknown", 0.0
             results.append((label, score))
-<<<<<<< HEAD
+
         return results
-=======
-        return results
->>>>>>> 052c681a0ba6e09aa5ca67ded8d1911c675b54bb
+
