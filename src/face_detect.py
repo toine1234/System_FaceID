@@ -20,6 +20,7 @@ class FaceDetector:
         retina_det_size=(640, 640),
         retina_skip=8,
         retina_conf=0.7,
+        frame_skip=2,  # SỬA: Thêm param frame_skip
     ):
         # Ẩn warning không cần thiết
         warnings.filterwarnings("ignore", category=UserWarning, module="onnxruntime")
@@ -63,6 +64,8 @@ class FaceDetector:
         self.frame_count = 0
         self.start_time = time.time()
         self.smooth_fps = 0.0
+        self.frame_skip_counter = 0  # SỬA: Counter cho frame_skip
+        self.frame_skip = frame_skip
 
         self.retina_cache = []
         self.retina_skip = retina_skip
@@ -94,6 +97,13 @@ class FaceDetector:
 
     def detect_and_align(self, frame):
         self.frame_count += 1
+        
+        # SỬA: Frame skipping để giảm tải
+        self.frame_skip_counter += 1
+        if self.frame_skip_counter < self.frame_skip:
+            return frame.copy(), []  # Return copy frame, no faces
+        self.frame_skip_counter = 0
+
         annotated = frame.copy()
         aligned_faces = []
 
@@ -146,14 +156,14 @@ class FaceDetector:
                     for (lx, ly) in kps.astype(int):
                         cv2.circle(annotated, (lx, ly), 2, (0, 0, 255), -1)
 
-                # Fallback cuối: crop bbox YOLO
+                # Fallback cuối: crop bbox YOLO với bilinear resize tốt hơn
                 else:
                     face_crop = frame[y1:y2, x1:x2]
-                    aligned = cv2.resize(face_crop, (112, 112))
+                    aligned = cv2.resize(face_crop, (112, 112), interpolation=cv2.INTER_LINEAR)  # SỬA: Bilinear
 
             else:
                 face_crop = frame[y1:y2, x1:x2]
-                aligned = cv2.resize(face_crop, (112, 112))
+                aligned = cv2.resize(face_crop, (112, 112), interpolation=cv2.INTER_LINEAR)  # SỬA: Bilinear
 
             aligned_faces.append((aligned, (x1, y1, x2, y2)))
 
@@ -169,61 +179,3 @@ class FaceDetector:
         cv2.putText(annotated, fps_text, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (40, 255, 40), 2, cv2.LINE_AA)
 
         return annotated, aligned_faces
-
-# def run_realtime():
-#     print("[TEST] Running FaceDetector – YOLOv11 + RetinaFace 3D (Async/MPS)")
-
-#     detector = FaceDetector(
-#         yolo_model_path="/Users/sarahtruc/Documents/System_FaceID/models/yolov11n-face.pt",
-#         device="mps",
-#         yolo_imgsz=448,
-#         yolo_conf=0.45,
-#         retina_det_size=(320, 320),
-#         retina_skip=8,
-#         retina_conf=0.70,
-#     )
-
-#     cap = cv2.VideoCapture(0)
-#     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-#     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-#     if not cap.isOpened():
-#         print("❌ Không thể mở webcam!")
-#         return
-
-#     print("[INFO] Nhấn 'q' để thoát…")
-
-#     # --- Double-buffer bất đồng bộ ---
-#     executor = ThreadPoolExecutor(max_workers=2)
-
-#     # Lấy khung đầu tiên
-#     ret, frame = cap.read()
-#     if not ret:
-#         print("❌ Không lấy được khung hình đầu tiên")
-#         cap.release()
-#         return
-
-#     future: Future = executor.submit(detector.detect_and_align, frame.copy())
-
-#     while True:
-#         ret, frame = cap.read()
-#         if not ret:
-#             break
-
-#         # Lấy kết quả đã xử lý của khung trước
-#         annotated_prev, _ = future.result()
-
-#         # Gửi khung hiện tại đi xử lý
-#         future = executor.submit(detector.detect_and_align, frame.copy())
-
-#         # Hiển thị khung đã xử lý
-#         cv2.imshow("YOLOv11 + RetinaFace 3D (Optimized Async)", annotated_prev)
-#         if cv2.waitKey(1) & 0xFF == ord('q'):
-#             break
-
-#     executor.shutdown(wait=False)
-#     cap.release()
-#     cv2.destroyAllWindows()
-
-
-# if __name__ == "__main__":
-#     run_realtime()

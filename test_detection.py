@@ -1,8 +1,4 @@
 
-
-
-
-
 # from ultralytics import YOLO
 # from facenet_pytorch import MTCNN
 # from src.alignment import norm_crop
@@ -140,3 +136,184 @@ class FaceDetector:
 #     cap.release()
 #     cv2.destroyAllWindows()
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # Fix import path
+import cv2
+import numpy as np
+import pickle
+from tqdm import tqdm
+import faiss
+import onnxruntime as ort
+from src.face_detect import FaceDetector
+
+class ArcFaceRecognizerONNX:
+    """
+    ArcFace ONNX Recognizer tương thích YOLOv11n-face
+    - Dataset: dataset/SinhVien/<Name>/*.jpg
+    - DB: encodings/embeddings.pkl
+    """
+
+    def __init__(self,
+                 onnx_path="models/arcface.onnx",
+                 db_path="encodings/embeddings.pkl",
+                 dataset_root="dataset/SinhVien",
+                 threshold=0.6,
+                 use_faiss=True,
+                 detector=None):
+        self.onnx_path = onnx_path
+        self.db_path = db_path
+        self.dataset_root = dataset_root
+        self.threshold = threshold
+        self.use_faiss = use_faiss
+
+        # --- Phát hiện thiết bị (CPU dùng ONNXRuntime) ---
+        self.device = "cpu"
+        print(f"[INIT] ArcFaceRecognizerONNX initializing on {self.device.upper()}")
+
+        # --- Load mô hình ONNX ---
+        if not os.path.exists(self.onnx_path):
+            raise FileNotFoundError(f"ONNX model not found: {self.onnx_path}")
+        self.session = ort.InferenceSession(self.onnx_path, providers=["CPUExecutionProvider"])
+        self.input_name = self.session.get_inputs()[0].name
+        self.output_name = self.session.get_outputs()[0].name
+        self.input_size = (112, 112)
+        print(f"[READY] ArcFace ONNX loaded: {self.onnx_path}")
+
+        # --- Load detector ---
+        self.detector = detector if detector else FaceDetector(
+            device=self.device,
+            yolo_model_path="models/yolov11n-face.pt"
+        )
+
+        # --- Load hoặc build DB ---
+        self.labels = []
+        self.embeddings = np.empty((0, 512), dtype=np.float32)
+        self.index = None
+
+        if os.path.exists(self.db_path):
+            self._load_db()
+        else:
+            print("[INFO] Database not found, building new one...")
+            self.build_embeddings()
+
+        print(f"[READY] ArcFaceRecognizerONNX ready with {len(self.labels)} embeddings")
+
+    # ========================================================
+    def preprocess(self, face_bgr):
+        """Convert BGR->RGB, resize, normalize, shape=(1,3,112,112)"""
+        face_rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(face_rgb, self.input_size)
+        blob = resized.astype(np.float32).transpose(2, 0, 1)
+        blob = np.expand_dims(blob, 0)
+        blob = (blob - 127.5) / 128.0
+        return blob
+
+    def extract_embedding(self, face_bgr):
+        """Get 512D normalized embedding from aligned face using ONNX"""
+        blob = self.preprocess(face_bgr)
+        emb = self.session.run([self.output_name], {self.input_name: blob})[0]
+        emb = emb.flatten().astype(np.float32)
+        emb /= np.linalg.norm(emb)
+        return emb
+
+    # ========================================================
+    def build_embeddings(self):
+        """Build database from dataset folders"""
+        if not os.path.exists(self.dataset_root):
+            raise FileNotFoundError(f"Dataset not found: {self.dataset_root}")
+
+        labels, embeddings = [], []
+        print(f"[BUILD] Building embeddings from {self.dataset_root} ...")
+
+        for person in tqdm(sorted(os.listdir(self.dataset_root)), desc="Students"):
+            person_path = os.path.join(self.dataset_root, person)
+            if not os.path.isdir(person_path):
+                continue
+
+            person_embs = []
+            for img_file in os.listdir(person_path):
+                if not img_file.lower().endswith((".jpg", ".png", ".jpeg")):
+                    continue
+                img_path = os.path.join(person_path, img_file)
+                img = cv2.imread(img_path)
+                if img is None:
+                    continue
+                try:
+                    _, aligned_faces = self.detector.detect_and_align(img)
+                    if not aligned_faces:
+                        continue
+                    face, _ = aligned_faces[0]
+                    emb = self.extract_embedding(face)
+                    person_embs.append(emb)
+                except Exception:
+                    continue
+
+            if person_embs:
+                mean_emb = np.mean(person_embs, axis=0)
+                mean_emb /= np.linalg.norm(mean_emb)
+                embeddings.append(mean_emb)
+                labels.append(person)
+
+        if not embeddings:
+            raise RuntimeError("No valid face embeddings were built!")
+
+        self.labels = labels
+        self.embeddings = np.vstack(embeddings).astype(np.float32)
+
+        if self.use_faiss:
+            faiss.normalize_L2(self.embeddings)
+            self.index = faiss.IndexFlatIP(512)
+            self.index.add(self.embeddings)
+
+        self._save_db()
+        print(f"[DONE] Built embeddings for {len(self.labels)} students.")
+
+    # ========================================================
+    def recognize(self, face_bgr):
+        """Recognize a single face -> (label, score)"""
+        emb = self.extract_embedding(face_bgr)
+        if self.index is not None:
+            faiss.normalize_L2(emb.reshape(1, -1))
+            sims, ids = self.index.search(emb.reshape(1, -1), 1)
+            sim, idx = sims[0][0], ids[0][0]
+        else:
+            sims = np.dot(self.embeddings, emb)
+            idx = np.argmax(sims)
+            sim = sims[idx]
+
+        label = self.labels[idx] if sim >= self.threshold else "Unknown"
+        return label, float(sim)
+
+    def recognize_faces(self, aligned_faces):
+        """Recognize multiple aligned faces in frame"""
+        results = []
+        for face_bgr, _ in aligned_faces:
+            try:
+                label, score = self.recognize(face_bgr)
+            except Exception:
+                label, score = "Unknown", 0.0
+            results.append((label, score))
+        return results
+
+    # ========================================================
+    def _load_db(self):
+        """Load DB from pickle"""
+        with open(self.db_path, "rb") as f:
+            data = pickle.load(f)
+        self.labels = data["labels"]
+        self.embeddings = np.array(data["embeddings"], dtype=np.float32)
+
+        if self.use_faiss:
+            faiss.normalize_L2(self.embeddings)
+            self.index = faiss.IndexFlatIP(512)
+            self.index.add(self.embeddings)
+
+        print(f"[LOAD] Loaded {len(self.labels)} embeddings from {self.db_path}")
+
+    def _save_db(self):
+        """Save DB to pickle"""
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        with open(self.db_path, "wb") as f:
+            pickle.dump({"labels": self.labels, "embeddings": self.embeddings}, f)
+        print(f"[SAVE] Database saved -> {self.db_path}")
