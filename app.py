@@ -1,4 +1,4 @@
-from flask import Flask, render_template, Response
+from flask import Flask, render_template, Response, jsonify
 import cv2
 import torch
 import platform
@@ -6,14 +6,16 @@ import warnings
 import os
 import logging
 import sys
+import time
 from contextlib import contextmanager
 
-# Ẩn cảnh báo FutureWarning trong InsightFace
-warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
+# ================================================================
+# ⚙️ Cấu hình Flask & môi trường
+# ================================================================
+app = Flask(__name__)
+latest = {"status": "idle"}  # Dữ liệu điểm danh mới nhất (cho frontend)
 
-# ================================================================
-# 🧹 Ẩn các log không cần thiết (ONNXRuntime, Ultralytics, InsightFace)
-# ================================================================
+warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["INSIGHTFACE_LOG_LEVEL"] = "ERROR"
@@ -24,7 +26,7 @@ logging.getLogger("onnxruntime").setLevel(logging.ERROR)
 logging.getLogger("ultralytics").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# Context manager để tạm thời tắt in ra console
+# Tắt in ra console tạm thời
 @contextmanager
 def suppress_stdout():
     with open(os.devnull, "w") as devnull:
@@ -37,13 +39,10 @@ def suppress_stdout():
 
 
 # ================================================================
-# 1️⃣ Khởi tạo Flask App & Model
+# 1️⃣ Khởi tạo mô hình nhận diện khuôn mặt
 # ================================================================
-app = Flask(__name__)
-
 print("\n[KHỞI TẠO] Đang tải mô hình...")
 
-# --- Tự động chọn thiết bị ---
 if torch.cuda.is_available():
     device = "cuda"
 elif platform.system() == "Darwin" and torch.backends.mps.is_available():
@@ -52,11 +51,9 @@ else:
     device = "cpu"
 print(f"[THIẾT BỊ] Đã chọn: {device.upper()}")
 
-# --- Import các module mô hình ---
 from src.face_detect import FaceDetector
 from src.face_recognize import FaceRecognizer
 
-# --- Load mô hình (ẩn log InsightFace) ---
 with suppress_stdout():
     detector = FaceDetector(
         yolo_model_path="models/yolov11n-face.pt",
@@ -75,6 +72,7 @@ print("[SẴN SÀNG] ✅ Mô hình đã được tải thành công!\n")
 # 2️⃣ Xử lý video thời gian thực
 # ================================================================
 def generate_frame():
+    global latest
     cap = cv2.VideoCapture(0)
     cap.set(3, 640)
     cap.set(4, 480)
@@ -82,12 +80,10 @@ def generate_frame():
         print("❌ Không thể mở webcam.")
         return
 
-    frame_count = 0
     while True:
         success, frame = cap.read()
         if not success:
             break
-        frame_count += 1
 
         # 1️⃣ Phát hiện và căn chỉnh khuôn mặt
         annotated, faces = detector.detect_and_align(frame)
@@ -96,15 +92,29 @@ def generate_frame():
         for aligned_face, (x1, y1, x2, y2) in faces:
             try:
                 label, score = recognizer.recognize(aligned_face)
-                text = f"{label} ({score*100:.1f}%)" if label != "Unknown"  else "Unknown"
+                text = f"{label} ({score*100:.1f}%)" if label != "Unknown" else "Unknown"
                 color = (0, 255, 0) if label != "Unknown" else (0, 0, 255)
+
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(annotated, text, (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+
+                # ✅ Nếu nhận diện thành công (điểm tin cậy >= 0.6)
+                if label != "Unknown" and score >= 0.6:
+                    latest = {
+                        "status": "new",
+                        "name": label,
+                        "score": f"{score*100:.1f}%",
+                        "time": time.strftime("%H:%M:%S")
+                    }
+                    with open("attendance_log.csv", "a") as f:
+                        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{label},{score}\n")
+
+
             except Exception:
                 continue
 
-        # 3️⃣ Mã hóa khung hình JPEG để stream
+        # 3️⃣ Mã hóa khung hình để stream
         ret, buffer = cv2.imencode('.jpg', annotated)
         if not ret:
             continue
@@ -121,14 +131,28 @@ def generate_frame():
 def index():
     return render_template('index.html')
 
+
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_frame(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
+@app.route("/attendance_update")
+def attendance_update():
+    """
+    Route cho giao diện web lấy thông tin điểm danh mới nhất.
+    """
+    global latest
+    if latest.get("status") == "new":
+        payload = latest.copy()
+        latest["status"] = "idle"
+        return jsonify(payload)
+    return jsonify({"status": "idle"})
+
+
 # ================================================================
-# 4️⃣ Chạy server Flask
+# 4️⃣ Chạy Flask server
 # ================================================================
 if __name__ == '__main__':
     print("[CHẠY] 🚀 Server Flask FaceID đã khởi động tại: http://127.0.0.1:5001/")

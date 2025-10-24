@@ -1,42 +1,260 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Face Recognition Attendance System</title>
-    <!-- Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
-    <style>
-        body {
-            background: linear-gradient(135deg, #e3f2fd, #ffffff);
-        }
-        .video-container {
-            max-width: 720px;
-            margin: auto;
-            border-radius: 15px;
-            overflow: hidden;
-            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
-        }
-        .header-title {
-            font-weight: bold;
-            color: #0d6efd;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>Face Recognition Attendance System</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+
+  <style>
+    /* ===== Overall Layout ===== */
+    body {
+      background: radial-gradient(circle at top left, #b8dcff, #f3f9ff 50%, #ffffff);
+      font-family: 'Poppins', sans-serif;
+      color: #333;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .header-title {
+      font-weight: 700;
+      color: #0d6efd;
+      letter-spacing: 1px;
+    }
+
+    .header-title i {
+      color: #0d6efd;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.9; }
+      50% { transform: scale(1.15); opacity: 1; }
+    }
+
+    /* ===== Layout ===== */
+    .content-wrapper {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 40px;
+      padding-bottom: 60px;
+      align-items: flex-start;
+    }
+
+    /* ===== Camera ===== */
+    .video-container {
+      flex: 1;
+      max-width: 720px;
+      border-radius: 18px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+      border: 2px solid rgba(13,110,253,0.2);
+      backdrop-filter: blur(12px);
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .video-container:hover {
+      transform: scale(1.01);
+      box-shadow: 0 14px 40px rgba(0,0,0,0.2);
+    }
+
+    .video-container img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    /* ===== Student Card ===== */
+    .info-card {
+      width: 340px;
+      background: rgba(255, 255, 255, 0.8);
+      border-radius: 20px;
+      padding: 25px;
+      text-align: center;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(13,110,253,0.15);
+      transition: transform 0.3s ease;
+    }
+
+    .info-card:hover {
+      transform: translateY(-5px);
+    }
+
+    .student-img {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 4px solid #0d6efd;
+      margin-bottom: 15px;
+      box-shadow: 0 0 25px rgba(13,110,253,0.4);
+      animation: fadeIn 1s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.8); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .info-card h4 {
+      font-weight: 600;
+      color: #0d6efd;
+      margin-bottom: 8px;
+    }
+
+    .info-card .meta {
+      color: #555;
+      font-size: 0.9rem;
+    }
+
+    .status {
+      margin-top: 10px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: #0a8754;
+      background: rgba(25,135,84,0.1);
+      padding: 6px 10px;
+      border-radius: 8px;
+      display: inline-block;
+    }
+
+    .status i {
+      color: #0a8754;
+      margin-right: 6px;
+    }
+
+    /* ===== Toast Notification ===== */
+    #toastContainer {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 3000;
+    }
+
+    .toast-custom {
+      background: linear-gradient(135deg, #198754, #0d6efd);
+      color: #fff;
+      border: none;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+      animation: slideInRight 0.5s ease;
+    }
+
+    @keyframes slideInRight {
+      from { transform: translateX(120%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    /* ===== Footer ===== */
+    footer {
+      text-align: center;
+      color: #777;
+      font-size: 0.9rem;
+      padding: 15px 0;
+      border-top: 1px solid #eee;
+      background: rgba(255,255,255,0.6);
+    }
+  </style>
 </head>
+
 <body>
+  <div class="container py-5 text-center">
+    <!-- Header -->
+    <h1 class="header-title mb-4">
+      <i class="fa-solid fa-camera-retro"></i> FaceID Camera
+    </h1>
+    <p class="text-muted mb-5">Real-time face recognition for attendance tracking</p>
 
-<div class="container py-5 text-center">
-    <!-- Tiêu đề -->
-    <h1 class="header-title mb-4"><i class="fa-solid fa-camera-retro"></i> FaceID Camera </h1>
-    <p class="text-muted mb-5">Real-time face recognition through webcam</p>
-
-    <!-- Camera -->
-    <div class="video-container border">
+    <!-- Main Content -->
+    <div class="content-wrapper">
+      <!-- Camera -->
+      <div class="video-container">
         <img src="{{ url_for('video_feed') }}" class="img-fluid" alt="Camera Stream">
-    </div>
-</div>
+      </div>
 
-<!-- Bootstrap JS -->
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+      <!-- Student Info -->
+      <div class="info-card" id="studentCard">
+        <img src="https://cdn-icons-png.flaticon.com/512/847/847969.png" class="student-img" id="studentImg">
+        <h4 id="studentName">No student detected</h4>
+        <p class="meta mb-1" id="studentScore">Confidence: --</p>
+        <p class="meta mb-3" id="studentTime">Time: --</p>
+        <div class="status" id="studentNote"><i class="bi bi-patch-check-fill"></i> Waiting for recognition...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toastContainer"></div>
+
+  <!-- Sound -->
+  <audio id="ding" preload="auto">
+    <source src="https://cdn.pixabay.com/download/audio/2022/03/15/audio_2df90bff7f.mp3" type="audio/mpeg">
+  </audio>
+
+  <!-- Bootstrap JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script>
+    const toastContainer = document.getElementById("toastContainer");
+    const dingSound = document.getElementById("ding");
+    const studentName = document.getElementById("studentName");
+    const studentScore = document.getElementById("studentScore");
+    const studentTime = document.getElementById("studentTime");
+    const studentNote = document.getElementById("studentNote");
+    const studentImg = document.getElementById("studentImg");
+    let lastName = "";
+
+    // Toast Notification
+    function showToast(name, score, time) {
+      const toast = document.createElement("div");
+      toast.className = "toast align-items-center text-white toast-custom show mb-2";
+      toast.role = "alert";
+      toast.innerHTML = `
+        <div class="d-flex p-3">
+          <div class="me-3"><i class="bi bi-patch-check-fill text-warning fs-4"></i></div>
+          <div class="toast-body text-start">
+            <strong>${name}</strong> has been marked present<br>
+            <small>${time} • Confidence: ${score}</small>
+          </div>
+          <button type="button" class="btn-close btn-close-white ms-auto" data-bs-dismiss="toast"></button>
+        </div>`;
+      toastContainer.appendChild(toast);
+      dingSound.play().catch(() => {});
+      setTimeout(() => toast.remove(), 4500);
+    }
+
+    // Update student card
+    function updateStudentInfo(name, score, time) {
+      studentName.textContent = name;
+      studentScore.textContent = `Confidence: ${score}`;
+      studentTime.textContent = `Time: ${time}`;
+      studentNote.innerHTML = `<i class="bi bi-patch-check-fill text-success"></i> Attendance successfully recorded!`;
+      studentNote.style.background = "rgba(25,135,84,0.15)";
+      studentNote.style.color = "#198754";
+      studentImg.src = "https://cdn-icons-png.flaticon.com/512/847/847969.png";
+    }
+
+    // Poll Flask API
+    async function checkAttendance() {
+      try {
+        const res = await fetch("/attendance_update");
+        const data = await res.json();
+        if (data.status === "new" && data.name !== lastName) {
+          lastName = data.name;
+          showToast(data.name, data.score, data.time);
+          updateStudentInfo(data.name, data.score, data.time);
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+      }
+    }
+
+    setInterval(checkAttendance, 2000);
+  </script>
+
+  <footer>© 2025 FaceID Attendance System — Designed by <strong>H2T</strong></footer>
 </body>
 </html>
