@@ -155,6 +155,6 @@ def attendance_update():
 # 4️⃣ Chạy Flask server
 # ================================================================
 if __name__ == '__main__':
-    print("[CHẠY] 🚀 Server Flask FaceID đã khởi động tại: http://127.0.0.1:5001/")
+    print("[CHẠY] 🚀 Server Flask FaceID đã khởi động")
     print("[THÔNG BÁO] Nhấn CTRL + C để dừng.\n")
     app.run(debug=False, port=5001)
