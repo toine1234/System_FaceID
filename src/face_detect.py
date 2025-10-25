@@ -12,7 +12,7 @@ from insightface.utils import face_align
 
 
 # ================================================================
-# ⚙️ Logging & Warning Setup
+# Logging & Warning Setup
 # ================================================================
 warnings.filterwarnings("ignore", category=UserWarning)
 ort.set_default_logger_severity(3)
@@ -64,7 +64,7 @@ class FaceDetector:
         self.retina_skip, self.retina_conf = retina_skip, retina_conf
 
     # ================================================================
-    # 🔹 Utilities
+    #  Utilities
     # ================================================================
     @staticmethod
     def _iou(a, b):
@@ -86,7 +86,7 @@ class FaceDetector:
             cv2.circle(canvas, (x, y), 1, color, -1)
 
     # ================================================================
-    # 🚀 Detection & Alignment
+    # Detection & Alignment
     # ================================================================
     def detect_and_align(self, frame):
         self.frame_count += 1
