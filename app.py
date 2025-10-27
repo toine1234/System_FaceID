@@ -42,7 +42,7 @@ def suppress_stdout():
 
 
 # ================================================================
-# 1️Model Initialization
+# 1️ Model Initialization
 # ================================================================
 print("\n[INIT] Loading models...")
 
@@ -78,6 +78,15 @@ def generate_frame():
         print("❌ Unable to access webcam.")
         return
 
+    # -------------------------------
+    # 🗂️ Tạo thư mục logs nếu chưa có
+    # -------------------------------
+    os.makedirs("logs", exist_ok=True)
+    ATTENDANCE_LOG = os.path.join("logs", "attendance_log.csv")
+
+    # Khởi tạo file nếu chưa có
+    if not os.path.exists(ATTENDANCE_LOG):
+        open(ATTENDANCE_LOG, "w", encoding="utf-8").write("Datetime,Name,Score\n")
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -96,14 +105,21 @@ def generate_frame():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
                 if label != "Unknown" and score >= 0.6:
+                    now = time.strftime("%Y-%m-%d %H:%M:%S")
+                    today = time.strftime("%Y-%m-%d")
+
+                    # 🧾 File 1: Ghi log chi tiết (mọi lần)
+                    with open(ATTENDANCE_LOG, "a", encoding="utf-8") as f:
+                        f.write(f"{now},{label},{score:.4f}\n")
+
+
+                    # Cập nhật trạng thái để gửi về frontend
                     latest = {
                         "status": "new",
                         "name": label,
                         "score": f"{score*100:.1f}%",
                         "time": time.strftime("%H:%M:%S")
                     }
-                    with open("attendance_log.csv", "a") as f:
-                        f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{label},{score:.4f}\n")
             except Exception:
                 continue
 
@@ -142,9 +158,35 @@ def attendance_update():
 
 
 # ================================================================
+# Auto Build & Evaluate before starting Flask
+# ================================================================
+def auto_build_and_evaluate():
+    """Tự động huấn luyện & đánh giá hệ thống nếu cần."""
+    from src.face_recognize import FaceRecognizer
+    from src.evaluate import evaluate_system  # file evaluate.py
+
+    db_path = "encodings/embeddings.pkl"
+
+    # 1️⃣ Nếu chưa có embeddings thì tự động build
+    if not os.path.exists(db_path):
+        print("[AUTO] 🧠 No embeddings found — building new face database...")
+        recognizer = FaceRecognizer(device=device, db_path=db_path, threshold=0.6)
+        recognizer.build_embeddings("dataset/SinhVien")
+        print("[AUTO] ✅ Embeddings database created.")
+
+    # 2️⃣ Tự động đánh giá độ chính xác
+    print("[AUTO] 📊 Evaluating system performance...")
+    try:
+        evaluate_system()
+        print("[AUTO] ✅ Evaluation completed (saved to logs/evaluation_report.csv).")
+    except Exception as e:
+        print(f"[AUTO] ⚠️ Evaluation skipped: {e}")
+
+
+# ================================================================
 # Launch Flask Server
 # ================================================================
 if __name__ == "__main__":
+    auto_build_and_evaluate()
     print("[RUNNING] 🚀 Flask FaceID Server started.")
-    print("[INFO] Press CTRL + C to stop.\n")
     app.run(debug=False, port=5001)
