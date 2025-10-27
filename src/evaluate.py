@@ -8,6 +8,15 @@ from sklearn.svm import SVC
 from insightface.app import FaceAnalysis
 import cv2
 import csv
+# ==========================================================
+#  TP (True Positive):  Nhận đúng người thật (được xác định chính xác). 
+#  FP (False Positive): Nhận sai người lạ thành người thật.
+#  FN (False Negative): Nhận sai người thật thành người lạ (Unknown).
+#  TN (True Negative):  Nhận đúng người lạ (Unknown).
+#  Accuracy:  Độ chính xác tổng thể của hệ thống.  Accuracy = (TP + TN) / (TP + TN + FP + FN)
+#  FAR (False Acceptance Rate):  Tỷ lệ chấp nhận nhầm người lạ. FAR = FP / (FP + TN)
+#  FRR (False Rejection Rate):  Tỷ lệ từ chối nhầm người thật. FRR = FN / (FN + TP)
+# ==========================================================
 
 # ==========================================================
 # 1. Khởi tạo model trích xuất embedding (ArcFace)
@@ -109,7 +118,7 @@ def main():
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Metric", "Value"])
-        writer.writerow(["True Positive (TP)", tp])
+        writer.writerow(["True Positive (TP)", tp])  
         writer.writerow(["False Positive (FP)", fp])
         writer.writerow(["False Negative (FN)", fn])
         writer.writerow(["True Negative (TN)", tn])
