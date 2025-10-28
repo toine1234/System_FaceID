@@ -28,7 +28,7 @@ class FaceDetector:
         face_app: Optional[FaceAnalysis] = None,
         yolo_imgsz=320,
         yolo_conf=0.45,
-        yolo_stride=3,  # <-- TĂNG STRIDE LÊN 3 (hoặc 4)
+        yolo_stride=3,
     ):
         self.device = device or (
             "cuda" if torch.cuda.is_available()
@@ -95,7 +95,7 @@ class FaceDetector:
         annotated = frame.copy() # Luôn bắt đầu từ frame mới
         
         # DÒNG IF NÀY CHỈ CHECK 1 ĐIỀU KIỆN (đây là code đúng)
-        if self.frame_count % self.yolo_stride == 0:
+        if self.frame_count % self.yolo_stride != 0:
             
             # 1. Reset cache
             aligned_faces_results = []
