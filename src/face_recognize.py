@@ -10,10 +10,13 @@ import os, sys, pickle, cv2, faiss
 import numpy as np
 from typing import List, Tuple, Optional
 from tqdm import tqdm
+import torch
+import logging # Thêm logging
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # fix import path
 from insightface.app import FaceAnalysis
-from src.face_detect import FaceDetector
+# from src.face_detect import FaceDetector # Tạm thời không cần import vòng
+# from insightface.app import FaceAnalysis # Bị lặp
 
 
 class FaceRecognizer:
@@ -21,29 +24,45 @@ class FaceRecognizer:
         self,
         device: Optional[str] = None,
         model_name: str = "buffalo_l",
+        face_app: Optional[FaceAnalysis] = None,
         db_path: str = "encodings/embeddings.pkl",
         threshold: float = 0.6,
         use_faiss: bool = True,
-        detector: Optional[FaceDetector] = None,
+        detector: Optional['FaceDetector'] = None, # Dùng 'FaceDetector' trong ngoặc
         dataset_root: str = "dataset/SinhVien",
     ):
-        import torch
         if device is None:
             device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
         self.device, self.db_path, self.threshold = device, db_path, threshold
         self.use_faiss, self.dataset_root = use_faiss, dataset_root
 
         print(f"[INIT] ArcFace ({model_name}) on {self.device}")
-        # NOTE: InsightFace FaceAnalysis chỉ hỗ trợ ctx_id=0 với CUDA; MPS/CPU -> -1
-        ctx_id = 0 if self.device == "cuda" else -1
-        self.face_app = FaceAnalysis(name=model_name, allowed_modules=["detection", "recognition"])
-        self.face_app.prepare(ctx_id=ctx_id, det_size=(320, 320))
 
-        # Detector YOLO (phòng khi cần tự căn chỉnh ảnh chưa aligned)
-        yolo_path = os.path.join("models", "yolov11n-face.pt")
-        if not os.path.exists(yolo_path):
-            raise FileNotFoundError(f"YOLO model not found: {yolo_path}")
-        self.detector = detector or FaceDetector(device=self.device, yolo_model_path=yolo_path)
+        if face_app:
+            self.face_app = face_app
+            print("[INFO] ArcFace (Shared) ready")
+        else:
+            print("[WARN] Creating new FaceAnalysis for Recognizer.")
+            ctx_id = 0 if self.device == "cuda" else -1
+            self.face_app = FaceAnalysis(name=model_name, allowed_modules=["detection", "recognition"])
+            self.face_app.prepare(ctx_id=ctx_id, det_size=(320, 320))
+
+        # ================================================================
+        # TỐI ƯU: Cache lại mô hình recognition để gọi trực tiếp
+        # ================================================================
+        if 'recognition' not in self.face_app.models:
+            logging.error("FaceAnalysis object must be initialized with 'recognition' module.")
+            raise RuntimeError("FaceAnalysis object must be initialized with 'recognition'.")
+        self.recognition_model = self.face_app.models['recognition']
+        # ================================================================
+
+        # Detector YOLO (chỉ load khi thực sự cần, ví dụ: build_embeddings)
+        self.detector = detector
+        self._detector_loader = lambda: FaceDetector( # Sử dụng lambda để trì hoãn việc load
+            device=self.device, 
+            yolo_model_path=os.path.join("models", "yolov11n-face.pt"),
+            face_app=self.face_app
+        )
 
         # DB
         self.labels: List[str] = []
@@ -78,7 +97,8 @@ class FaceRecognizer:
             self.labels = list(data.get("labels", []))
             embs = np.asarray(data.get("embeddings", []), dtype=np.float32)
             # đảm bảo đã chuẩn hóa cho cả trường hợp không dùng FAISS
-            self.embeddings = embs / np.clip(np.linalg.norm(embs, axis=1, keepdims=True), 1e-6, None) if len(embs) else embs
+            norm_embs = embs / np.clip(np.linalg.norm(embs, axis=1, keepdims=True), 1e-6, None)
+            self.embeddings = norm_embs if len(embs) else np.empty((0, 512), dtype=np.float32)
             self._ensure_faiss()
             print(f"[INFO] Loaded DB: {len(self.labels)} entries from {self.db_path}")
         except Exception as e:
@@ -93,19 +113,30 @@ class FaceRecognizer:
 
     # -------------------- Embedding --------------------
     def _embed_from_aligned(self, img_bgr_112: np.ndarray) -> np.ndarray:
-        """Nhận 512-D embedding từ ảnh 112x112 BGR đã align."""
-        # FaceAnalysis.get sẽ tự detect; với ảnh 112x112 khuôn mặt, detect rất nhanh
-        rgb = cv2.cvtColor(img_bgr_112, cv2.COLOR_BGR2RGB)
-        faces = self.face_app.get(rgb)
-        if not faces:
-            raise ValueError("No face found in aligned image.")
-        emb = faces[0].embedding.astype(np.float32)
-        return emb / np.linalg.norm(emb)  # L2-norm
+        """
+        Nhận 512-D embedding từ ảnh 112x112 BGR đã align.
+        (TỐI ƯU: Gọi thẳng get_feat thay vì get)
+        """
+
+        # Mô hình buffalo_l recognition nhận ảnh BGR 112x112
+        img_rgb_112 = cv2.cvtColor(img_bgr_112, cv2.COLOR_BGR2RGB)
+        emb = self.recognition_model.get_feat(img_bgr_112)
+        
+        # Chuẩn hóa L2
+        return emb.astype(np.float32) / np.linalg.norm(emb)
+        # ================================================================
 
     def extract_embedding(self, img_bgr: np.ndarray, aligned: bool = True) -> np.ndarray:
         """Trả embedding 512-D từ ảnh; nếu chưa aligned sẽ tự detect+align khuôn mặt đầu tiên."""
         if aligned:
             return self._embed_from_aligned(img_bgr)
+        
+        # Tải detector nếu đây là lần đầu gọi
+        if self.detector is None:
+            from src.face_detect import FaceDetector # Import tại chỗ
+            print("[INFO] Lazy loading detector for embedding extraction...")
+            self.detector = self._detector_loader()
+            
         _, aligned_faces = self.detector.detect_and_align(img_bgr)
         if not aligned_faces:
             raise ValueError("No face detected.")
@@ -134,7 +165,8 @@ class FaceRecognizer:
                     continue
                 try:
                     emb_list.append(self.extract_embedding(img, aligned=aligned))
-                except Exception:
+                except Exception as e:
+                    logging.warning(f"Failed to embed {path}: {e}")
                     failed += 1
             if emb_list:
                 m = np.mean(emb_list, axis=0).astype(np.float32)
@@ -157,15 +189,17 @@ class FaceRecognizer:
         """Nhận dạng 1 khuôn mặt đã align: trả (label, cosine)."""
         if len(self.labels) == 0:
             return "Unknown", 0.0
+        
+        # Hàm này giờ đã rất nhanh
         emb = self._embed_from_aligned(aligned_face)
 
         if self.index is not None:
             q = emb.reshape(1, -1).copy()
-            faiss.normalize_L2(q)
+            # faiss.normalize_L2(q) # Không cần vì emb đã được chuẩn hóa
             sims, ids = self.index.search(q, 1)
             sim, idx = float(sims[0][0]), int(ids[0][0])
         else:
-            sims = np.dot(self.embeddings, emb)
+            sims = np.dot(self.embeddings, emb) # Cả 2 vector đều đã được chuẩn hóa
             idx, sim = int(np.argmax(sims)), float(sims[np.argmax(sims)])
 
         return (self.labels[idx], sim) if sim >= self.threshold else ("Unknown", sim)
@@ -175,35 +209,43 @@ class FaceRecognizer:
         if len(self.labels) == 0 or not aligned_faces:
             return [("Unknown", 0.0) for _ in aligned_faces]
 
+        # 1. Trích xuất embedding theo lô (giờ đã rất nhanh)
         embs = []
         for img, _ in aligned_faces:
             try:
                 embs.append(self._embed_from_aligned(img))
             except Exception:
-                embs.append(None)
+                embs.append(None) # Thêm None nếu trích xuất thất bại
 
         results: List[Tuple[str, float]] = []
         valid_idx = [i for i, e in enumerate(embs) if e is not None]
-        if not valid_idx:
+        if not valid_idx: # Nếu không có embedding nào hợp lệ
             return [("Unknown", 0.0) for _ in aligned_faces]
 
+        # 2. Tạo ma trận embedding
         emb_mat = np.vstack([embs[i] for i in valid_idx]).astype(np.float32)
+        # Không cần chuẩn hóa L2 nữa vì _embed_from_aligned đã làm
 
+        # 3. Tìm kiếm theo lô
         if self.index is not None:
-            Q = emb_mat.copy()
-            faiss.normalize_L2(Q)
-            sims, ids = self.index.search(Q, 1)
+            # Q = emb_mat.copy()
+            # faiss.normalize_L2(Q) # Không cần
+            sims, ids = self.index.search(emb_mat, 1)
             top_sims = sims.ravel().tolist()
             top_ids = ids.ravel().tolist()
         else:
-            sims_all = self.embeddings @ emb_mat.T   # [N,512] @ [512,M] -> [N,M]
+            # [N, 512] @ [512, M] -> [N, M] (N: db, M: query)
+            sims_all = self.embeddings @ emb_mat.T   
             top_ids = np.argmax(sims_all, axis=0).tolist()
             top_sims = sims_all[top_ids, range(sims_all.shape[1])].tolist()
 
+        # 4. Map kết quả
         res_map = {}
         for j, i in enumerate(valid_idx):
             sim, idx = float(top_sims[j]), int(top_ids[j])
             res_map[i] = (self.labels[idx], sim) if sim >= self.threshold else ("Unknown", sim)
+        
+        # Trả về kết quả theo đúng thứ tự ban đầu
         for i in range(len(aligned_faces)):
-            results.append(res_map.get(i, ("Unknown", 0.0)))
+            results.append(res_map.get(i, ("Unknown", 0.0))) # Dùng 0.0 cho các mặt bị lỗi
         return results
