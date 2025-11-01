@@ -90,14 +90,14 @@ with suppress_stdout():
         yolo_model_path="models/yolov11n-face.pt", 
         device=device,          # YOLO sẽ dùng 'mps'
         face_app=main_face_app, # InsightFace sẽ dùng 'CoreML'
-        yolo_stride=4           # <-- Tăng stride lên 4 để mượt hơn
+        yolo_stride=7           # <-- Tăng stride lên 4 để mượt hơn
     )
     
     # 4. Truyền cả main_face_app VÀ detector vào Recognizer
     recognizer = FaceRecognizer(
         device=device, 
         db_path="encodings/embeddings.pkl", 
-        threshold=0.6,
+        threshold=0.5,
         detector=detector,
         face_app=main_face_app
     )

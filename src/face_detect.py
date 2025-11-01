@@ -10,7 +10,7 @@ import onnxruntime as ort
 from insightface.app import FaceAnalysis
 from insightface.utils import face_align
 from insightface.app.common import Face
-from typing import Optional
+from typing import Optional, List, Tuple
 
 # ================================================================
 # Logging & Warning Setup
