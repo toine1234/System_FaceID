@@ -9,9 +9,10 @@ from insightface.app import FaceAnalysis
 
 class FaceRecognizer:
     def __init__(self, device=None, model="buffalo_l", db_path="encodings/embeddings.pkl", 
-                 threshold=0.5, dataset_root="dataset/SinhVien", face_app=None):
+                 threshold=0.5, dataset_root="dataset/SinhVien", face_app=None, detector=None):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.db_path, self.threshold, self.dataset_root = db_path, threshold, dataset_root
+        self.detector = detector
         
         self.face_app = face_app or self._init_face_app(model)
         self.recognition_model = self.face_app.models["recognition"]
