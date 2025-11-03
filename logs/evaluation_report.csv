@@ -1,0 +1,8 @@
+Metric,Value
+True Positive (TP),13
+False Positive (FP),0
+False Negative (FN),0
+True Negative (TN),0
+Accuracy,100.00%
+FAR,0.00%
+FRR,0.00%

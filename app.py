@@ -98,7 +98,6 @@ with suppress_stdout():
         device=device, 
         db_path="encodings/embeddings.pkl", 
         threshold=0.5,
-        detector=detector,
         face_app=main_face_app
     )
     

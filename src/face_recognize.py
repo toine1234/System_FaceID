@@ -1,141 +1,210 @@
-import os, pickle, cv2, logging
+"""
+Face recognition using ArcFace (InsightFace) + SVM Classifier.
+Database: encodings/embeddings.pkl (embeddings + labels + SVM model)
+"""
+
+import os
+import sys
+import pickle
+import cv2
 import numpy as np
 from tqdm import tqdm
+from typing import List, Tuple, Optional
 from sklearn.svm import SVC
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder
 from sklearn.pipeline import make_pipeline
-import torch
+from sklearn.preprocessing import StandardScaler
+
+# --- Add project root path ---
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from insightface.app import FaceAnalysis
+from src.face_detect import FaceDetector
+
 
 class FaceRecognizer:
-    def __init__(self, device=None, model="buffalo_l", db_path="encodings/embeddings.pkl", 
-                 threshold=0.5, dataset_root="dataset/SinhVien", face_app=None, detector=None):
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.db_path, self.threshold, self.dataset_root = db_path, threshold, dataset_root
-        self.detector = detector
-        
-        self.face_app = face_app or self._init_face_app(model)
-        self.recognition_model = self.face_app.models["recognition"]
-        
-        self.labels = []
-        self.embeddings = np.empty((0, 512), dtype=np.float32)
-        self.classifier = None
-        self.scaler = StandardScaler()
-        self.label_encoder = LabelEncoder()
-        
-        if os.path.exists(db_path):
-            self._load_db()
-        if len(self.labels) == 0:
-            self.build_embeddings(dataset_root)
-        if len(self.labels) > 0:
-            self._train_svm()
-    
-    def _init_face_app(self, model):
+    def __init__(
+        self,
+        device: Optional[str] = None,
+        model_name: str = "buffalo_l",
+        db_path: str = "encodings/embeddings.pkl",
+        threshold: float = 0.5,
+        dataset_root: str = "dataset/SinhVien",
+        face_app=None,
+        detector=None
+    ):
+        import torch
+
+        # --- Device selection ---
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else (
+                "mps" if torch.backends.mps.is_available() else "cpu"
+            )
+        self.device = device
+        self.db_path = db_path
+        self.threshold = threshold
+        self.dataset_root = dataset_root
+
+        print(f"[INIT] ArcFace ({model_name}) on {self.device}")
+
+        # --- Load ArcFace model ---
         ctx_id = 0 if self.device == "cuda" else -1
-        app = FaceAnalysis(name=model, allowed_modules=["recognition"])
-        app.prepare(ctx_id=ctx_id, det_size=(112, 112))
-        return app
-    
+        self.face_app = FaceAnalysis(
+            name=model_name, allowed_modules=["detection", "recognition"]
+        )
+        self.face_app.prepare(ctx_id=ctx_id, det_size=(320, 320))
+
+        # --- Optional YOLO detector for better alignment ---
+        yolo_path = os.path.join("models", "yolov11n-face.pt")
+        if not os.path.exists(yolo_path):
+            raise FileNotFoundError(f"YOLO model not found: {yolo_path}")
+        self.detector = FaceDetector(device=self.device, yolo_model_path=yolo_path)
+
+        # --- Initialize DB variables ---
+        self.labels: List[str] = []
+        self.embeddings: np.ndarray = np.empty((0, 512), dtype=np.float32)
+        self.label_encoder = LabelEncoder()
+        self.classifier: Optional[SVC] = None
+
+        # --- Load or build database ---
+        if os.path.exists(self.db_path):
+            self._load_db()
+            if not self.labels:
+                print("[WARN] Empty DB → rebuilding...")
+                self.build_embeddings(self.dataset_root)
+        else:
+            print("[INFO] No DB found -> building new one...")
+            self.build_embeddings(self.dataset_root)
+
+        print(
+            f"[READY] {len(self.labels)} persons | device={self.device.upper()} | Classifier={'OK' if self.classifier else 'None'}"
+        )
+
+    # -------------------- DB I/O --------------------
     def _load_db(self):
         try:
             with open(self.db_path, "rb") as f:
-                d = pickle.load(f)
-                self.labels = d.get("labels", [])
-                self.embeddings = np.asarray(d.get("embeddings", []), dtype=np.float32)
-                self.classifier = d.get("classifier")
-                self.scaler = d.get("scaler", StandardScaler())
-                self.label_encoder = d.get("label_encoder", LabelEncoder())
+                data = pickle.load(f)
+            self.labels = list(data.get("labels", []))
+            self.embeddings = np.asarray(data.get("embeddings", []), dtype=np.float32)
+            self.label_encoder = data.get("label_encoder", LabelEncoder())
+            self.classifier = data.get("classifier", None)
+            print(f"[LOAD] Loaded {len(self.labels)} entries from {self.db_path}")
         except Exception as e:
-            logging.warning(f"Load failed: {e}")
-    
+            print(f"[WARN] Failed to load DB: {e}")
+            self.labels, self.embeddings, self.classifier = [], np.empty((0, 512), np.float32), None
+
     def _save_db(self):
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         with open(self.db_path, "wb") as f:
-            pickle.dump({
-                "labels": self.labels,
-                "embeddings": self.embeddings,
-                "classifier": self.classifier,
-                "scaler": self.scaler,
-                "label_encoder": self.label_encoder
-            }, f)
-    
-    def _get_embedding(self, img_aligned_112):
-        """Extract 512D L2-normalized embedding"""
-        emb = self.recognition_model.get_feat(img_aligned_112)
-        return emb / (np.linalg.norm(emb) + 1e-6)
-    
-    def build_embeddings(self, dataset_root):
-        """Build embeddings DB from dataset"""
-        self.labels, emb_dict = [], {}
-        
-        for person in tqdm(os.listdir(dataset_root), desc="Building embeddings"):
-            person_path = os.path.join(dataset_root, person)
-            if not os.path.isdir(person_path):
+            pickle.dump(
+                {
+                    "labels": self.labels,
+                    "embeddings": self.embeddings,
+                    "label_encoder": self.label_encoder,
+                    "classifier": self.classifier,
+                },
+                f,
+            )
+        print(f"[SAVE] DB saved to {self.db_path}")
+
+    # -------------------- Embedding --------------------
+    def _embed_from_aligned(self, img_bgr_112: np.ndarray) -> np.ndarray:
+        """Extract normalized 512D embedding from an aligned face (112x112)."""
+        rgb = cv2.cvtColor(img_bgr_112, cv2.COLOR_BGR2RGB)
+        faces = self.face_app.get(rgb)
+        if not faces:
+            raise ValueError("No face found in image.")
+        emb = faces[0].embedding.astype(np.float32)
+        return emb / np.linalg.norm(emb)
+
+    def extract_embedding(self, img_bgr: np.ndarray, aligned: bool = True) -> np.ndarray:
+        """Extract embedding from raw or aligned image."""
+        if aligned:
+            return self._embed_from_aligned(img_bgr)
+        _, aligned_faces = self.detector.detect_and_align(img_bgr)
+        if not aligned_faces:
+            raise ValueError("No face detected.")
+        face_img = aligned_faces[0][0]
+        face_img = cv2.resize(face_img, (112, 112))
+        return self._embed_from_aligned(face_img)
+
+    # -------------------- Build Embeddings + Train SVM --------------------
+    def build_embeddings(
+        self,
+        dataset_root: Optional[str] = None,
+        aligned: bool = True,
+        max_images_per_student: int = 10,
+    ):
+        root = dataset_root or self.dataset_root
+        if not os.path.exists(root):
+            raise FileNotFoundError(f"Dataset not found: {root}")
+
+        print(f"[BUILD] Building from dataset: {root}")
+        labels, vecs, failed = [], [], 0
+
+        for person_dir in tqdm(sorted(os.listdir(root)), desc="Students"):
+            pdir = os.path.join(root, person_dir)
+            if not os.path.isdir(pdir):
                 continue
-            
-            embs = []
-            for img_name in os.listdir(person_path):
-                img_path = os.path.join(person_path, img_name)
+            img_files = [
+                os.path.join(pdir, f)
+                for f in os.listdir(pdir)
+                if f.lower().endswith((".jpg", ".jpeg", ".png"))
+            ][:max_images_per_student]
+            for path in img_files:
+                img = cv2.imread(path)
+                if img is None:
+                    failed += 1
+                    continue
                 try:
-                    img = cv2.imread(img_path)
-                    if img is None:
-                        continue
-                    face = self.face_app.get(img)
-                    if len(face) == 0:
-                        continue
-                    
-                    # Align & extract
-                    M = face[0].alignment_matrix
-                    img_aligned = cv2.warpAffine(img, M, (112, 112))
-                    emb = self._get_embedding(img_aligned)
-                    embs.append(emb)
-                except:
-                    pass
-            
-            if embs:
-                mean_emb = np.mean(np.array(embs), axis=0)
-                mean_emb /= (np.linalg.norm(mean_emb) + 1e-6)
-                emb_dict[person] = mean_emb
-        
-        if emb_dict:
-            self.labels = list(emb_dict.keys())
-            self.embeddings = np.array([emb_dict[l] for l in self.labels], dtype=np.float32)
-            self._train_svm()
-            self._save_db()
-    
-    def _train_svm(self):
-        """Train SVM classifier"""
-        if len(self.labels) < 2:
+                    emb = self.extract_embedding(img, aligned=aligned)
+                    vecs.append(emb)
+                    labels.append(person_dir)
+                except Exception:
+                    failed += 1
+
+        if not vecs:
+            print("[ERROR] No valid faces found to build DB.")
             return
-        
-        labels_encoded = self.label_encoder.fit_transform(self.labels)
-        self.classifier = make_pipeline(
-            StandardScaler(),
-            SVC(kernel="rbf", C=1.0, gamma="auto", probability=True)
-        )
-        self.classifier.fit(self.embeddings, labels_encoded)
-    
-    def recognize_batch(self, imgs):
-        """Recognize faces in batch"""
+
+        self.labels = labels
+        self.embeddings = np.vstack(vecs).astype(np.float32)
+
+        # Encode labels numerically
+        y = self.label_encoder.fit_transform(self.labels)
+
+        # Train SVM classifier
+        self.classifier = make_pipeline(StandardScaler(), SVC(kernel="linear", probability=True))
+        self.classifier.fit(self.embeddings, y)
+
+        self._save_db()
+        print(f"[DONE] Trained SVM with {len(self.labels)} samples (failed: {failed})")
+
+    # -------------------- Recognition --------------------
+    def recognize(self, aligned_face: np.ndarray) -> Tuple[str, float]:
+        """Predict identity from an aligned face image."""
+        if self.classifier is None or len(self.labels) == 0:
+            return "Unknown", 0.0
+
+        emb = self._embed_from_aligned(aligned_face).reshape(1, -1)
+        probs = self.classifier.predict_proba(emb)[0]
+        idx = int(np.argmax(probs))
+        conf = float(np.max(probs))
+
+        label = self.label_encoder.inverse_transform([idx])[0]
+        if conf < self.threshold:
+            return "Unknown", conf
+        return label, conf
+
+    def recognize_faces(
+        self, aligned_faces: List[Tuple[np.ndarray, Tuple[int, int, int, int]]]
+    ) -> List[Tuple[str, float]]:
+        """Recognize multiple faces in a frame."""
         results = []
-        for img in imgs:
-            faces = self.face_app.get(img)
-            for face in faces:
-                M = face.alignment_matrix
-                aligned = cv2.warpAffine(img, M, (112, 112))
-                emb = self._get_embedding(aligned)
-                
-                if self.classifier:
-                    probs = self.classifier.predict_proba([emb])[0]
-                    conf = probs.max()
-                    label = self.label_encoder.inverse_transform([probs.argmax()])[0] if conf >= self.threshold else "Unknown"
-                else:
-                    label, conf = "Unknown", 0.0
-                
-                results.append({"name": label, "confidence": conf, "bbox": face.bbox})
-        
+        for face_img, _ in aligned_faces:
+            try:
+                label, conf = self.recognize(face_img)
+            except Exception:
+                label, conf = "Unknown", 0.0
+            results.append((label, conf))
         return results
-    
-    def recognize(self, img):
-        """Single image recognition"""
-        return self.recognize_batch([img])
