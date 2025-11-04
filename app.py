@@ -65,32 +65,31 @@ with suppress_stdout():
     print("[INIT] Detecting ONNX providers...")
     if device == "cuda":
         providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-        ctx_id = 0 # Dùng GPU đầu tiên
+        ctx_id = 0
     elif device == "mps":
-        # Ưu tiên CoreML cho Apple Silicon (nhanh nhất)
         providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider']
-        ctx_id = 0 # Dùng GPU (CoreML)
+        ctx_id = 0
         print("[INFO] Using CoreMLExecutionProvider for InsightFace.")
     else:
         providers = ['CPUExecutionProvider']
-        ctx_id = -1 # Dùng CPU
+        ctx_id = -1
         print("[INFO] Using CPUExecutionProvider for InsightFace.")
 
     # 2. TẠO 1 FaceAnalysis DUY NHẤT
     print("[INIT] Loading Consolidated FaceAnalysis (buffalo_l)...")
     main_face_app = FaceAnalysis(name="buffalo_l", 
                                  allowed_modules=["detection", "landmark_3d_68", "recognition"],
-                                 providers=providers) # <-- TRUYỀN PROVIDERS VÀO
+                                 providers=providers)
     
-    main_face_app.prepare(ctx_id=ctx_id, det_size=(320, 320))
+    main_face_app.prepare(ctx_id=ctx_id, det_size=(256, 256))
     print("[INIT] FaceAnalysis consolidated.")
 
     # 3. Truyền main_face_app vào Detector
     detector = FaceDetector(
         yolo_model_path="models/yolov11n-face.pt", 
-        device=device,          # YOLO sẽ dùng 'mps'
-        face_app=main_face_app, # InsightFace sẽ dùng 'CoreML'
-        yolo_stride=7           # <-- Tăng stride lên 4 để mượt hơn
+        device=device,
+        face_app=main_face_app,
+        yolo_stride=4
     )
     
     # 4. Truyền cả main_face_app VÀ detector vào Recognizer
@@ -112,6 +111,7 @@ def generate_frame():
     cap = cv2.VideoCapture(0)
     cap.set(3, 640)
     cap.set(4, 480)
+    cap.set(5, 20)
 
     if not cap.isOpened():
         print("❌ Unable to access webcam.")
@@ -121,51 +121,54 @@ def generate_frame():
     ATTENDANCE_LOG = os.path.join("logs", "attendance_log.csv")
     if not os.path.exists(ATTENDANCE_LOG):
         open(ATTENDANCE_LOG, "w", encoding="utf-8").write("Datetime,Name,Score\n")
+    
+    frame_count = 0
+    last_results = []
+    last_faces = []
         
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # 1. Detect và Align (trả về list các khuôn mặt)
-        annotated, faces = detector.detect_and_align(frame)
-        
-        if faces:
-            try:
-                # 2. Gọi hàm nhận diện THEO LÔ (BATCH) 1 LẦN DUY NHẤT
-                results = recognizer.recognize_faces(faces) # results là List[Tuple[label, score]]
+        frame_count += 1
+        if frame_count % 2 == 0:
+            annotated, faces = detector.detect_and_align(frame)
+            
+            if faces:
+                try:
+                    last_results = recognizer.recognize_faces(faces)
+                    last_faces = faces
+                except Exception as e:
+                    logging.error(f"Recognition batch failed: {e}")
+        else:
+            annotated = frame.copy()
+            faces = last_faces
 
-                # 3. Lặp qua kết quả và dữ liệu khuôn mặt ĐÃ CÓ
-                for (label, score), (aligned_img, (x1, y1, x2, y2)) in zip(results, faces):
+        if last_results and last_faces:
+            for (label, score), (aligned_img, (x1, y1, x2, y2)) in zip(last_results, last_faces):
+                
+                color = (0, 255, 0) if label != "Unknown" else (0, 0, 255)
+                text = f"{label} ({score*100:.1f}%)" if label != "Unknown" else "Unknown"
+
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(annotated, text, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+
+                if label != "Unknown" and score >= 0.6:
+                    now = time.strftime("%Y-%m-%d %H:%M:%S")
                     
-                    color = (0, 255, 0) if label != "Unknown" else (0, 0, 255)
-                    text = f"{label} ({score*100:.1f}%)" if label != "Unknown" else "Unknown"
+                    with open(ATTENDANCE_LOG, "a", encoding="utf-8") as f:
+                        f.write(f"{now},{label},{score:.4f}\n")
 
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(annotated, text, (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+                    latest = {
+                        "status": "new",
+                        "name": label,
+                        "score": f"{score*100:.1f}%",
+                        "time": time.strftime("%H:%M:%S")
+                    }
 
-                    if label != "Unknown" and score >= 0.6:
-                        now = time.strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        # Ghi log
-                        with open(ATTENDANCE_LOG, "a", encoding="utf-8") as f:
-                            f.write(f"{now},{label},{score:.4f}\n")
-
-                        # Cập nhật trạng thái
-                        latest = {
-                            "status": "new",
-                            "name": label,
-                            "score": f"{score*100:.1f}%",
-                            "time": time.strftime("%H:%M:%S")
-                        }
-            except Exception as e:
-                logging.error(f"Recognition batch failed: {e}")
-                pass # Bỏ qua frame này nếu có lỗi
-        # ================================================================
-
-        # 4. Gửi frame về trình duyệt
-        ok, buffer = cv2.imencode(".jpg", annotated)
+        ok, buffer = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
         if not ok:
             continue
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" +
@@ -206,7 +209,6 @@ def auto_build_and_evaluate():
     """Tự động huấn luyện & đánh giá hệ thống nếu cần."""
     db_path = "encodings/embeddings.pkl"
 
-    # Nếu chưa có embeddings thì tự động build
     if not os.path.exists(db_path):
         print("[AUTO] 🧠 No embeddings found — building new face database...")
         
@@ -220,14 +222,11 @@ def auto_build_and_evaluate():
         temp_recognizer.build_embeddings("dataset/SinhVien")
         print("[AUTO] ✅ Embeddings database created.")
         
-        # Cập nhật lại DB cho recognizer chính
         print("[AUTO] Reloading DB for main recognizer...")
         recognizer._load_db()
 
-    # Tự động đánh giá độ chính xác
     print("[AUTO] 📊 Evaluating system performance...")
     try:
-        # Truyền recognizer đã được tải đầy đủ vào
         evaluate_system() 
         print("[AUTO] ✅ Evaluation completed (saved to logs/evaluation_report.csv).")
     except Exception as e:
