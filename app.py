@@ -67,7 +67,7 @@ with suppress_stdout():
         providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
         ctx_id = 0
     elif device == "mps":
-        providers = ['CoreMLExecutionProvider', 'CPUExecutionProvider']
+        providers = ['CPUExecutionProvider']
         ctx_id = 0
         print("[INFO] Using CoreMLExecutionProvider for InsightFace.")
     else:
