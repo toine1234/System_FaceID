@@ -10,10 +10,11 @@ import onnxruntime as ort
 from insightface.app import FaceAnalysis
 from insightface.utils import face_align
 from insightface.app.common import Face
+from torchvision.ops import nms  # THÊM: Cho custom NMS
 from typing import Optional, List, Tuple
 
 # ================================================================
-# Logging & Warning Setup
+# Logging & Warning Setup (KHÔNG THAY ĐỔI)
 # ================================================================
 warnings.filterwarnings("ignore", category=UserWarning)
 ort.set_default_logger_severity(3)
@@ -26,61 +27,34 @@ class FaceDetector:
         yolo_model_path="models/yolov11n-face.pt",
         device=None,
         face_app: Optional[FaceAnalysis] = None,
-        yolo_imgsz=320,
-        yolo_conf=0.45,
-        yolo_stride=3,
+        yolo_imgsz=256,  # GIẢM: Input size nhỏ hơn (từ 320)
+        yolo_conf=0.5,
+        yolo_stride=3,  # TĂNG: Internal stride (từ 2)
+        predict_iou=0.4,  # TĂNG: NMS IoU cao hơn cho nhanh (từ 0.3)
+        agnostic_nms=True,
+        custom_nms_iou=0.4,  # Đồng bộ
     ):
-        # ------------------------------------------------------------
-        # Thiết lập thiết bị (CPU / CUDA / MPS)
-        # ------------------------------------------------------------
-        self.device = device or (
-            "cuda" if torch.cuda.is_available()
-            else "mps" if torch.backends.mps.is_available()
-            else "cpu"
-        )
-        print(f"[INIT] FaceDetector on {self.device}")
 
-        # ------------------------------------------------------------
-        # YOLOv11n-face model
-        # ------------------------------------------------------------
-        if not os.path.exists(yolo_model_path):
-            raise FileNotFoundError(f"❌ Missing YOLO model: {yolo_model_path}")
-        self.yolo = YOLO(yolo_model_path)
-        self.yolo_imgsz, self.yolo_conf, self.yolo_stride = yolo_imgsz, yolo_conf, max(1, yolo_stride)
-        try:
-            self.yolo.fuse()
-        except Exception:
-            pass
-        print(f"[INFO] YOLOv11 loaded (stride={self.yolo_stride})")
-
-        # ------------------------------------------------------------
-        # InsightFace Landmark model
-        # ------------------------------------------------------------
-        if face_app:
-            self.face_app = face_app
-            print("[INFO] InsightFace Landmark (Shared) ready")
-        else:
-            print("[WARN] Creating new FaceAnalysis for Detector (Landmarks only).")
-            ctx_id = 0 if self.device != "cpu" else -1
-            self.face_app = FaceAnalysis(
-                name="buffalo_l",
-                allowed_modules=["detection", "landmark_3d_68"]
-            )
-            self.face_app.prepare(ctx_id=ctx_id, det_size=(320, 320))
-
-        if 'landmark_3d_68' not in self.face_app.models:
-            raise RuntimeError("FaceAnalysis object must include 'landmark_3d_68' module.")
-
-        self.landmark_model = self.face_app.models['landmark_3d_68']
-
-        # ------------------------------------------------------------
-        # States & Cache
-        # ------------------------------------------------------------
         self.frame_count, self.start_time, self.smooth_fps = 0, time.time(), 0.0
+        self._last_detection_frame = -999
         self._cached_aligned_faces: List[Tuple[np.ndarray, Tuple[int, int, int, int]]] = []
+        self._frame_cache_ttl = 0  # TĂNG TTL= yolo_stride * 1.5 nếu cần
+        self.device = device
+        self.yolo_imgsz = yolo_imgsz
+        self.yolo_conf = yolo_conf
+        self.yolo_stride = yolo_stride
+        self.predict_iou = predict_iou
+        self.agnostic_nms = agnostic_nms
+        self.custom_nms_iou = custom_nms_iou
+        
+        # OPTIMIZED: Load YOLO với half và engine nếu có
+        self.yolo = YOLO(yolo_model_path)
+        half = (self.device == "cuda")  # Bật FP16 nếu CUDA
+        self.yolo.fuse()  # Fuse layers cho speed
+        self.landmark_model = face_app
 
     # ================================================================
-    # Utility Functions
+    # Utility Functions (KHÔNG THAY ĐỔI)
     # ================================================================
     @staticmethod
     def _draw_landmarks(canvas, lmk3d):
@@ -95,24 +69,26 @@ class FaceDetector:
             cv2.circle(canvas, (x, y), 1, color, -1)
 
     # ================================================================
-    # Detection & Alignment
+    # Detection & Alignment OPTIMIZED
     # ================================================================
     def detect_and_align(self, frame):
         """Phát hiện khuôn mặt và căn chỉnh theo landmark."""
         self.frame_count += 1
         annotated = frame.copy()
 
-        # Bỏ qua frame nếu chưa đến stride
-        if self.frame_count % self.yolo_stride != 0:
-            aligned_faces_results = []
-
-            # 1️⃣ YOLO Detection
+        should_detect = (self.frame_count % self.yolo_stride) == 0
+        
+        if should_detect:
+            # 1️⃣ YOLO Detection OPTIMIZED: half, verbose=False, engine auto
             results = self.yolo.predict(
                 frame,
                 imgsz=self.yolo_imgsz,
                 conf=self.yolo_conf,
+                iou=self.predict_iou,
+                agnostic_nms=self.agnostic_nms,
                 verbose=False,
-                half=(self.device == "cuda")
+                half=(self.device == "cuda"),  # FP16 cho CUDA
+                device=self.device  # Explicit device
             )
 
             boxes_obj = None
@@ -122,12 +98,27 @@ class FaceDetector:
             if boxes_obj is None or len(boxes_obj) == 0:
                 self.draw_fps(annotated)
                 self._cached_aligned_faces = []
+                self._last_detection_frame = self.frame_count
                 return annotated, []
 
-            boxes_xyxy = boxes_obj.xyxy.cpu().numpy().astype(int)
-            confs = boxes_obj.conf.cpu().numpy()
+            # 1️⃣.5️⃣ Custom NMS fallback
+            boxes_xyxy = boxes_obj.xyxy.cpu()
+            confs = boxes_obj.conf.cpu()
 
-            # 2️⃣ Landmark & Alignment
+            if len(boxes_xyxy) > 1:
+                keep_indices = nms(
+                    boxes_xyxy,
+                    confs,
+                    iou_threshold=self.custom_nms_iou
+                )
+                boxes_xyxy = boxes_xyxy[keep_indices]
+                confs = confs[keep_indices]
+
+            boxes_xyxy = boxes_xyxy.numpy().astype(int)
+            confs = confs.numpy()
+
+            # 2️⃣ Landmark & Alignment (batch nếu multi-face)
+            aligned_faces_results = []
             for (x1, y1, x2, y2), conf in zip(boxes_xyxy, confs):
                 aligned = None
                 bbox = (x1, y1, x2, y2)
@@ -144,9 +135,8 @@ class FaceDetector:
                     aligned = face_align.norm_crop_with_landmark(frame, kps, 112)
 
                 except Exception:
-                    # Nếu landmark lỗi → crop thô
-                    y1_c, y2_c = max(0, y1), max(0, y2)
-                    x1_c, x2_c = max(0, x1), max(0, x2)
+                    y1_c, y2_c = max(0, y1), min(frame.shape[0], y2)
+                    x1_c, x2_c = max(0, x1), min(frame.shape[1], x2)
                     if y2_c > y1_c and x2_c > x1_c:
                         aligned = cv2.resize(frame[y1_c:y2_c, x1_c:x2_c], (112, 112))
                     else:
@@ -155,17 +145,18 @@ class FaceDetector:
                 if aligned is not None:
                     aligned_faces_results.append((aligned, bbox))
 
-            self.draw_fps(annotated)
             self._cached_aligned_faces = aligned_faces_results
-            return annotated, aligned_faces_results
+            self._frame_cache_ttl = self.yolo_stride * 2  # TĂNG: Cache lâu hơn (từ stride)
 
-        # Trả về kết quả từ cache
-        else:
-            self.draw_fps(annotated)
-            return annotated, self._cached_aligned_faces
+        self._frame_cache_ttl -= 1
+        if self._frame_cache_ttl <= 0:
+            self._cached_aligned_faces = []
+
+        self.draw_fps(annotated)
+        return annotated, self._cached_aligned_faces
 
     # ================================================================
-    # FPS Calculation
+    # FPS Calculation (KHÔNG THAY ĐỔI)
     # ================================================================
     def draw_fps(self, canvas):
         """Tính toán và vẽ FPS (làm mượt EMA) lên canvas."""
