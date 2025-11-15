@@ -1,5 +1,4 @@
-dlib
-face-recognition
+
 numpy
 Pillow
 mtcnn
