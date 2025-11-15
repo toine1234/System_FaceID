@@ -1,12 +1,19 @@
 import os, sys, time, logging, warnings, cv2, torch, platform
 from threading import Thread, Lock, Event
 from queue import Queue, Empty
-from flask import Flask, render_template, Response, jsonify
+from flask import Flask, render_template, Response, jsonify, request
 from contextlib import contextmanager
 from src.face_detect import FaceDetector
 from src.face_recognize import FaceRecognizer
 from insightface.app import FaceAnalysis
 from src.evaluate import evaluate_system
+import jwt
+from dotenv import load_dotenv
+import requests
+
+current_student_id = None
+current_class_id = None
+curren_date = None
 
 CONFIG = {
     "CAP_DEVICE": 0, "FRAME_WIDTH": 640, "FRAME_HEIGHT": 480, "CAM_FPS": 20,
@@ -116,12 +123,29 @@ def detection_worker():
             faces_info = new_faces
             for f in faces_info:
                 label, conf = f["label"], f["conf"]
+                if current_student_id is None:
+                    continue
                 if label != "Unknown" and conf >= CONFIG["RECOG_THRESHOLD"] and now - last_log.get(label, 0) > CONFIG["LOG_INTERVAL"]:
                     last_log[label] = now
                     os.makedirs("logs", exist_ok=True)
+                    if label == current_student_id:
+                        status = "success"
+                        msg = f"Điểm danh thành công: {label}"
+                        try:
+                            r = requests.post(os.getenv('URI_API_NODE'), json={"MaSV": label, "MaLop":current_class_id, "ngay_day":curren_date, "status":True}, timeout=3)
+                            print(r)
+                            if r.status_code == 200:
+                                logger.info(f"Điểm danh gửi về Node thành công cho {label}")
+                                latest.update({"status": status, "name": label, "score": f"{conf*100:.1f}%", "time": time.strftime("%H:%M:%S"), "msg": msg,"redirect":os.getenv('URL_REACT')}) 
+                        except Exception as e:
+                            logger.error(f"Lỗi gửi điểm danh về Node: {e}")                             
+                    else: 
+                        status = "mismatch"
+                        msg = f"Khuôn mặt không khớp mã SV! Expected: {current_student_id}, Found: {label}"
+                        latest.update({"status": status, "name": label, "score": f"{conf*100:.1f}%", "time": time.strftime("%H:%M:%S"), "msg": msg,"redirect":os.getenv('URL_REACT')})
                     with open("logs/attendance_log.csv", "a", encoding="utf-8") as log:
-                        log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{label},{conf:.4f}\n")
-                    latest.update({"status": "new", "name": label, "score": f"{conf*100:.1f}%", "time": time.strftime("%H:%M:%S")})
+                        log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{label},{conf:.4f},{status}\n")
+                    
 
 Thread(target=detection_worker, daemon=True).start()
 
@@ -155,7 +179,24 @@ def generate_frame():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    global current_student_id, current_class_id, curren_date
+    
+    key_secret = os.getenv("ACCESS_TOKEN_SECRET_SIGNATURE")
+    token = request.args.get("token")
+    
+    if not token:
+        return "Thiếu token", 400
+    try:
+        payload = jwt.decode(token, key_secret, algorithms=["HS256"])
+        current_student_id = payload["masv"]
+        current_class_id = payload["MaLop"]
+        curren_date = payload["ngay_day"]
+        print("class:", current_class_id)
+        print("date:",curren_date)
+        print("masv:",current_student_id)
+    except Exception as e:
+        return f"Token không hợp lệ: {str(e)}", 400
+    return render_template("index.html", student_id=current_student_id)
 
 @app.route("/video_feed")
 def video_feed():
@@ -163,7 +204,7 @@ def video_feed():
 
 @app.route("/attendance_update")
 def attendance_update():
-    if latest.get("status") == "new":
+    if latest.get("status") != "idle":
         payload = latest.copy()
         latest["status"] = "idle"
         return jsonify(payload)

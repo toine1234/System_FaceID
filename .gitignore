@@ -2,3 +2,4 @@ dataset/
 .venv/
 dataset_WIDER-FACE/
 dataset_detector/
+.env

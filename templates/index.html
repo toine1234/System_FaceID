@@ -242,10 +242,10 @@
       try {
         const res = await fetch("/attendance_update");
         const data = await res.json();
-        if (data.status === "new" && data.name !== lastName) {
-          lastName = data.name;
+        if (data.status === "success") {
           showToast(data.name, data.score, data.time);
           updateStudentInfo(data.name, data.score, data.time);
+          window.location.href = data.redirect
         }
       } catch (err) {
         console.error("Polling error:", err);
