@@ -1,4 +1,5 @@
-
+dlib
+face-recognition
 numpy
 Pillow
 mtcnn
@@ -19,3 +20,4 @@ insightface
 retina-face
 ultralytics==8.3.50
 faiss-cpu
+jwt
