@@ -1,153 +1,189 @@
 import os
-import pickle
 import numpy as np
-from tqdm import tqdm
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
-from sklearn.svm import SVC
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import make_pipeline
-from insightface.app import FaceAnalysis
-import cv2
 import csv
+import cv2
+from insightface.app import FaceAnalysis
+from numpy.linalg import norm
+import matplotlib.pyplot as plt
+import pandas as pd
+from datetime import datetime
 
-# ==========================================================
-# TP/FP/FN/TN/Accuracy/FAR/FRR as before
+# ============================================
+# CONFIG
+# ============================================
+DATASET_KNOWN = "dataset/SinhVien"
+DATASET_UNKNOWN = "dataset/Unknown"
+THRESHOLD = 0.60
+DEVICE = 0   # 0: GPU, -1: CPU
+LOG_FILE = "logs/attendance_log.csv"
 
-# ==========================================================
-# 1. Init ArcFace (unify det_size=320)
-# ==========================================================
+# ============================================
+# Init ArcFace
+# ============================================
 print("[INIT] Loading ArcFace model...")
 app = FaceAnalysis(name="buffalo_l")
-app.prepare(ctx_id=0, det_size=(320, 320))  # SỬA: Unify với runtime
-print("[READY] ✅ Model loaded\n")
+app.prepare(ctx_id=DEVICE, det_size=(320, 320))
+print("[READY] Model loaded ✓\n")
 
-# ==========================================================
-# 2. Utilities (normalize emb, mean per person)
-# ==========================================================
+# ============================================
+# Embedding extractor
+# ============================================
 def get_embedding(img_path):
-    """Extract embedding (normalize L2)."""
     img = cv2.imread(img_path)
     if img is None:
         return None
     faces = app.get(img)
-    if len(faces) == 0:
+    if not faces:
         return None
     emb = faces[0].embedding.astype(np.float32)
-    return emb / np.linalg.norm(emb)  # SỬA: Normalize L2
+    return emb / (norm(emb) + 1e-8)
 
-def load_dataset(dataset_path, mean_per_person=True):
-    """Load embeddings; optional mean per person."""
-    person_embs = {}  # Dict: person -> list embs
-    for person in os.listdir(dataset_path):
-        person_dir = os.path.join(dataset_path, person)
-        if not os.path.isdir(person_dir):
+# ============================================
+# Build reference embedding dictionary
+# ============================================
+def load_reference_embeddings(root):
+    database = {}
+    for person in os.listdir(root):
+        person_path = os.path.join(root, person)
+        if not os.path.isdir(person_path):
             continue
+        
         embs = []
-        for img_name in os.listdir(person_dir):
-            img_path = os.path.join(person_dir, img_name)
+        for img_name in os.listdir(person_path):
+            img_path = os.path.join(person_path, img_name)
             emb = get_embedding(img_path)
             if emb is not None:
                 embs.append(emb)
+        
         if embs:
-            if mean_per_person:
-                mean_emb = np.mean(embs, axis=0)
-                mean_emb /= np.linalg.norm(mean_emb)  # Re-norm mean
-                person_embs[person] = mean_emb
-            else:
-                person_embs[person] = embs  # All embs if not mean
-    X = np.vstack(list(person_embs.values()))
-    y = list(person_embs.keys())
-    return np.array(X), np.array(y)
+            mean_emb = np.mean(embs, axis=0)
+            mean_emb /= (norm(mean_emb) + 1e-8)
+            database[person] = mean_emb
+    return database
 
-# ==========================================================
-# 3. Main: Train + Eval
-# ==========================================================
-def main():
-    DATASET = "dataset/SinhVien"
-    UNKNOWN = "dataset/Unknown"
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (norm(a) * norm(b) + 1e-8)
 
-    print("[DATA] Loading dataset...")
-    X, y = load_dataset(DATASET, mean_per_person=True)  # SỬA: Mean per person
-    print(f"Loaded {len(X)} mean embeddings from {len(np.unique(y))} classes")
-
-    # Split (80/20, stratified)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=42
-    )
-
-    # Save (unchanged)
-    os.makedirs("encodings", exist_ok=True)
-    pickle.dump((X_train, y_train), open("encodings/embeddings_train.pkl", "wb"))
-    pickle.dump((X_test, y_test), open("encodings/embeddings_test.pkl", "wb"))
-
-    # ==========================================================
-    # 4. Train SVM (RBF + Scale)
-    # ==========================================================
-    print("\n[TRAIN] Training SVM classifier...")
-    clf = make_pipeline(StandardScaler(), SVC(kernel='rbf', probability=True, random_state=42))  # SỬA: RBF + Scale
-    clf.fit(X_train, y_train)
-    pickle.dump(clf, open("encodings/classifier_svm.pkl", "wb"))
-    print("[DONE] ✅ Classifier trained successfully!\n")
-
-    # ==========================================================
-    # 5. Evaluate
-    # ==========================================================
-    print("[EVAL] Evaluating model...")
-    y_pred = clf.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-
-    # Test Unknown (SỬA: Assume flat dir, all y="Unknown"; predict all as known → FP if not "Unknown")
-    X_unknown = []  # Flat load
-    unknown_dir = UNKNOWN
-    if os.path.exists(unknown_dir):
-        for img_name in os.listdir(unknown_dir):
-            if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
-                img_path = os.path.join(unknown_dir, img_name)
-                emb = get_embedding(img_path)
-                if emb is not None:
-                    X_unknown.append(emb)
-    X_unknown = np.array(X_unknown)
-    if len(X_unknown) > 0:
-        y_unknown_pred = clf.predict(X_unknown)
-        fp = np.sum(y_unknown_pred != "Unknown")  # SỬA: All predicted != "Unknown" → FP
-        tn = len(X_unknown) - fp
-    else:
-        fp, tn = 0, 0
-
-    # Known (unchanged)
-    tp = np.sum(y_pred == y_test)
-    fn = len(y_test) - tp  # SỬA: Clearer
-
-    FAR = fp / (fp + tn + 1e-8)
-    FRR = fn / (fn + tp + 1e-8)
-
-    # ==========================================================
-    # 6. Report (unchanged)
-    # ==========================================================
-    os.makedirs("logs", exist_ok=True)
-    csv_path = "logs/evaluation_report.csv"
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Metric", "Value"])
-        writer.writerow(["True Positive (TP)", tp])
-        writer.writerow(["False Positive (FP)", fp])
-        writer.writerow(["False Negative (FN)", fn])
-        writer.writerow(["True Negative (TN)", tn])
-        writer.writerow(["Accuracy", f"{acc*100:.2f}%"])
-        writer.writerow(["FAR", f"{FAR*100:.2f}%"])
-        writer.writerow(["FRR", f"{FRR*100:.2f}%"])
-
-    print("\n================ Evaluation Report ================")
-    print(f"TP={tp}, FP={fp}, FN={fn}, TN={tn}")
-    print(f"Accuracy: {acc*100:.2f}%")
-    print(f"FAR: {FAR*100:.2f}%")
-    print(f"FRR: {FRR*100:.2f}%")
-    print("===================================================")
-    print(f"[SAVED] Report saved at: {csv_path}")
-
-# ==========================================================
-# 7. Wrapper
-# ==========================================================
+# ============================================
+# MAIN EVALUATION
+# ============================================
 def evaluate_system():
-    main()
+    print("[DATA] Loading known embeddings...")
+    ref_db = load_reference_embeddings(DATASET_KNOWN)
+    print(f"Loaded {len(ref_db)} known identities.\n")
+
+    if len(ref_db) == 0:
+        print("[ERROR] No reference embeddings found!")
+        return
+
+    # Global counters
+    TP = FP = FN = TN = 0
+
+    # Time window evaluation (5 sec)
+    window_results = []  # list of dict per evaluation window
+    start_time = datetime.now()
+
+    # Evaluate known identities
+    for person in ref_db.keys():
+        test_dir = os.path.join(DATASET_KNOWN, person)
+        for img_name in os.listdir(test_dir):
+            img_path = os.path.join(test_dir, img_name)
+            emb = get_embedding(img_path)
+            if emb is None:
+                continue
+            
+            # cosine match
+            sims = {name: cosine_similarity(emb, ref_db[name]) for name in ref_db}
+            best_label = max(sims, key=sims.get)
+            best_sim = sims[best_label]
+
+            if best_sim >= THRESHOLD:
+                if best_label == person:
+                    TP += 1
+                else:
+                    FN += 1
+            else:
+                FN += 1
+
+            # Evaluate unknown images every loop
+            if os.path.exists(DATASET_UNKNOWN):
+                for img_name in os.listdir(DATASET_UNKNOWN):
+                    img_path = os.path.join(DATASET_UNKNOWN, img_name)
+                    emb = get_embedding(img_path)
+                    if emb is None:
+                        continue
+                    
+                    sims = {name: cosine_similarity(emb, ref_db[name]) for name in ref_db}
+                    best_label = max(sims, key=sims.get)
+                    best_sim = sims[best_label]
+
+                    if best_sim >= THRESHOLD:
+                        FP += 1
+                    else:
+                        TN += 1
+
+            # calculate metrics every 5 seconds
+            now = datetime.now()
+            if (now - start_time).total_seconds() >= 5:
+                ACC = (TP + TN) / (TP + TN + FP + FN + 1e-8)
+                FAR = FP / (FP + TN + 1e-8)
+                FRR = FN / (TP + FN + 1e-8)
+
+                window_results.append({
+                    "time": now.strftime("%H:%M:%S"),
+                    "ACC": ACC,
+                    "FAR": FAR,
+                    "FRR": FRR,
+                    "TP": TP, "FP": FP, "FN": FN, "TN": TN
+                })
+                
+                start_time = now  # reset window timer
+
+    # Final global metrics
+    ACC = (TP + TN) / (TP + TN + FP + FN + 1e-8)
+    FAR = FP / (FP + TN + 1e-8)
+    FRR = FN / (TP + FN + 1e-8)
+
+    print("\n=========== FINAL FACEID EVALUATION ===========")
+    print(f"TP = {TP}, FP = {FP}, FN = {FN}, TN = {TN}")
+    print(f"Accuracy = {ACC*100:.2f}%")
+    print(f"FAR      = {FAR*100:.2f}%")
+    print(f"FRR      = {FRR*100:.2f}%")
+    print("===============================================\n")
+
+    # Save GLOBAL CSV
+    os.makedirs("logs", exist_ok=True)
+    with open("logs/evaluation_result.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["Metric", "Value"])
+        w.writerow(["TP", TP])
+        w.writerow(["FP", FP])
+        w.writerow(["FN", FN])
+        w.writerow(["TN", TN])
+        w.writerow(["Accuracy (%)", f"{ACC*100:.2f}"])
+        w.writerow(["FAR (%)", f"{FAR*100:.2f}"])
+        w.writerow(["FRR (%)", f"{FRR*100:.2f}"])
+
+    # Save 5-second window data
+    df = pd.DataFrame(window_results)
+    df.to_csv("logs/Evaluation.csv", index=False)
+    print("[SAVED] Evaluation.csv created ✓")
+
+    # Plot chart
+    plt.figure(figsize=(10, 5))
+    plt.plot(df["time"], df["ACC"], marker='o', label="Accuracy")
+    plt.plot(df["time"], df["FAR"], marker='o', label="FAR")
+    plt.plot(df["time"], df["FRR"], marker='o', label="FRR")
+    plt.grid()
+    plt.xlabel("Time Window (5s)")
+    plt.ylabel("Metric Value")
+    plt.title("FACEID METRICS TREND (5-SECOND WINDOW)")
+    plt.legend()
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig("logs/5s_realtime_trend.png", dpi=300)
+    plt.show()
+    print("[SAVED] logs/5s_realtime_trend.png ✓")
+
+if __name__ == "__main__":
+    evaluate_system()
