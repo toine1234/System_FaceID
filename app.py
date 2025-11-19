@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from src.face_detect import FaceDetector
 from src.face_recognize import FaceRecognizer
 from insightface.app import FaceAnalysis
-from src.evaluate import evaluate_system
 
 CONFIG = {
     "CAP_DEVICE": 0, "FRAME_WIDTH": 640, "FRAME_HEIGHT": 480, "CAM_FPS": 20,
@@ -188,26 +187,21 @@ def attendance_update():
         return jsonify(payload)
     return jsonify({"status": "idle"})
 
-def auto_build_and_evaluate():
-    has_emb = os.path.exists(CONFIG["EMBEDDINGS_DIR"]) and any(
-        f.endswith("_embedding.pkl") for f in os.listdir(CONFIG["EMBEDDINGS_DIR"])
-    )
+# def auto_build_and_evaluate():
+#     has_emb = os.path.exists(CONFIG["EMBEDDINGS_DIR"]) and any(
+#         f.endswith("_embedding.pkl") for f in os.listdir(CONFIG["EMBEDDINGS_DIR"])
+#     )
     
-    if not has_emb:
-        logger.info("[AUTO] Building embeddings...")
-        temp = FaceRecognizer(device=device, db_path=None, embeddings_dir=CONFIG["EMBEDDINGS_DIR"],
-                             threshold=CONFIG["RECOG_THRESHOLD"], face_app=main_face_app, detector=detector)
-        temp.build_embeddings(CONFIG["DATASET_PATH"], train_classifier=True)
-        recognizer._load_db()
-    
-    try:
-        evaluate_system()
-    except Exception as e:
-        logger.error("Evaluation skipped: %s", e)
+#     if not has_emb:
+#         logger.info("[AUTO] Building embeddings...")
+#         temp = FaceRecognizer(device=device, db_path=None, embeddings_dir=CONFIG["EMBEDDINGS_DIR"],
+#                              threshold=CONFIG["RECOG_THRESHOLD"], face_app=main_face_app, detector=detector)
+#         temp.build_embeddings(CONFIG["DATASET_PATH"], train_classifier=True)
+#         recognizer._load_db()
 
 if __name__ == "__main__":
     try:
-        auto_build_and_evaluate()
+        # auto_build_and_evaluate()
         logger.info("[RUNNING] Flask server on port 5001")
         app.run(debug=False, port=5001, threaded=True)
     except KeyboardInterrupt:
