@@ -5,7 +5,6 @@ import cv2
 from insightface.app import FaceAnalysis
 from numpy.linalg import norm
 import matplotlib.pyplot as plt
-import pandas as pd
 from datetime import datetime
 
 # ============================================
@@ -14,11 +13,14 @@ from datetime import datetime
 DATASET_KNOWN = "dataset/SinhVien"
 DATASET_UNKNOWN = "dataset/Unknown"
 THRESHOLD = 0.60
-DEVICE = 0   # 0: GPU, -1: CPU
-LOG_FILE = "logs/attendance_log.csv"
+DEVICE = -1       # -1 = CPU, 0 = GPU
+
+OUT_DIR = "logs"
+RESULT_CSV = f"{OUT_DIR}/evaluation_result.csv"
+PLOT_PATH = f"{OUT_DIR}/evaluation.png"
 
 # ============================================
-# Init ArcFace
+# INIT ARCface
 # ============================================
 print("[INIT] Loading ArcFace model...")
 app = FaceAnalysis(name="buffalo_l")
@@ -26,10 +28,10 @@ app.prepare(ctx_id=DEVICE, det_size=(320, 320))
 print("[READY] Model loaded ✓\n")
 
 # ============================================
-# Embedding extractor
+# EMBEDDING
 # ============================================
-def get_embedding(img_path):
-    img = cv2.imread(img_path)
+def get_embedding(image_path):
+    img = cv2.imread(image_path)
     if img is None:
         return None
     faces = app.get(img)
@@ -38,66 +40,59 @@ def get_embedding(img_path):
     emb = faces[0].embedding.astype(np.float32)
     return emb / (norm(emb) + 1e-8)
 
-# ============================================
-# Build reference embedding dictionary
-# ============================================
-def load_reference_embeddings(root):
-    database = {}
+def build_reference_embeddings(root):
+    db = {}
     for person in os.listdir(root):
-        person_path = os.path.join(root, person)
-        if not os.path.isdir(person_path):
+        person_dir = os.path.join(root, person)
+        if not os.path.isdir(person_dir):
             continue
-        
-        embs = []
-        for img_name in os.listdir(person_path):
-            img_path = os.path.join(person_path, img_name)
-            emb = get_embedding(img_path)
-            if emb is not None:
-                embs.append(emb)
-        
-        if embs:
-            mean_emb = np.mean(embs, axis=0)
-            mean_emb /= (norm(mean_emb) + 1e-8)
-            database[person] = mean_emb
-    return database
 
-def cosine_similarity(a, b):
+        features = []
+        for img_name in os.listdir(person_dir):
+            emb = get_embedding(os.path.join(person_dir, img_name))
+            if emb is not None:
+                features.append(emb)
+
+        if features:
+            mean_emb = np.mean(features, axis=0)
+            mean_emb /= (norm(mean_emb) + 1e-8)
+            db[person] = mean_emb
+    return db
+
+def cos_sim(a, b):
     return np.dot(a, b) / (norm(a) * norm(b) + 1e-8)
 
 # ============================================
 # MAIN EVALUATION
 # ============================================
 def evaluate_system():
-    print("[DATA] Loading known embeddings...")
-    ref_db = load_reference_embeddings(DATASET_KNOWN)
-    print(f"Loaded {len(ref_db)} known identities.\n")
+    os.makedirs(OUT_DIR, exist_ok=True)
 
-    if len(ref_db) == 0:
-        print("[ERROR] No reference embeddings found!")
+    print("[STEP] Building reference embeddings...")
+    ref_db = build_reference_embeddings(DATASET_KNOWN)
+    print(f"Loaded {len(ref_db)} identities\n")
+
+    if not ref_db:
+        print("[ERROR] No reference DB found!")
         return
 
-    # Global counters
-    TP = FP = FN = TN = 0
+    TP = TN = FP = FN = 0
 
-    # Time window evaluation (5 sec)
-    window_results = []  # list of dict per evaluation window
-    start_time = datetime.now()
-
-    # Evaluate known identities
-    for person in ref_db.keys():
-        test_dir = os.path.join(DATASET_KNOWN, person)
-        for img_name in os.listdir(test_dir):
-            img_path = os.path.join(test_dir, img_name)
-            emb = get_embedding(img_path)
+    # ----------------------------------------
+    # Evaluate KNOWN → TP & FN
+    # ----------------------------------------
+    print("[STEP] Evaluating KNOWN samples...")
+    for person in ref_db:
+        person_dir = os.path.join(DATASET_KNOWN, person)
+        for img_name in os.listdir(person_dir):
+            emb = get_embedding(os.path.join(person_dir, img_name))
             if emb is None:
                 continue
-            
-            # cosine match
-            sims = {name: cosine_similarity(emb, ref_db[name]) for name in ref_db}
-            best_label = max(sims, key=sims.get)
-            best_sim = sims[best_label]
 
-            if best_sim >= THRESHOLD:
+            scores = {name: cos_sim(emb, ref_db[name]) for name in ref_db}
+            best_label, best_score = max(scores, key=scores.get), max(scores.values())
+
+            if best_score >= THRESHOLD:
                 if best_label == person:
                     TP += 1
                 else:
@@ -105,55 +100,44 @@ def evaluate_system():
             else:
                 FN += 1
 
-            # Evaluate unknown images every loop
-            if os.path.exists(DATASET_UNKNOWN):
-                for img_name in os.listdir(DATASET_UNKNOWN):
-                    img_path = os.path.join(DATASET_UNKNOWN, img_name)
-                    emb = get_embedding(img_path)
-                    if emb is None:
-                        continue
-                    
-                    sims = {name: cosine_similarity(emb, ref_db[name]) for name in ref_db}
-                    best_label = max(sims, key=sims.get)
-                    best_sim = sims[best_label]
+    # ----------------------------------------
+    # Evaluate UNKNOWN → TN & FP
+    # ----------------------------------------
+    print("[STEP] Evaluating UNKNOWN samples...")
+    if os.path.exists(DATASET_UNKNOWN):
+        for img_name in os.listdir(DATASET_UNKNOWN):
+            emb = get_embedding(os.path.join(DATASET_UNKNOWN, img_name))
+            if emb is None:
+                continue
 
-                    if best_sim >= THRESHOLD:
-                        FP += 1
-                    else:
-                        TN += 1
+            scores = {name: cos_sim(emb, ref_db[name]) for name in ref_db}
+            best_score = max(scores.values())
 
-            # calculate metrics every 5 seconds
-            now = datetime.now()
-            if (now - start_time).total_seconds() >= 5:
-                ACC = (TP + TN) / (TP + TN + FP + FN + 1e-8)
-                FAR = FP / (FP + TN + 1e-8)
-                FRR = FN / (TP + FN + 1e-8)
+            if best_score >= THRESHOLD:
+                FP += 1              # unknown nhưng nhận nhầm → false acceptance
+            else:
+                TN += 1
+    else:
+        print("[WARN] Unknown folder missing!")
 
-                window_results.append({
-                    "time": now.strftime("%H:%M:%S"),
-                    "ACC": ACC,
-                    "FAR": FAR,
-                    "FRR": FRR,
-                    "TP": TP, "FP": FP, "FN": FN, "TN": TN
-                })
-                
-                start_time = now  # reset window timer
+    # ----------------------------------------
+    # Compute Metrics
+    # ----------------------------------------
+    total = TP + TN + FP + FN
 
-    # Final global metrics
-    ACC = (TP + TN) / (TP + TN + FP + FN + 1e-8)
+    ACC = (TP + TN) / (total + 1e-8)
     FAR = FP / (FP + TN + 1e-8)
     FRR = FN / (TP + FN + 1e-8)
 
-    print("\n=========== FINAL FACEID EVALUATION ===========")
+    print("\n=========== FINAL RESULT ===========")
     print(f"TP = {TP}, FP = {FP}, FN = {FN}, TN = {TN}")
     print(f"Accuracy = {ACC*100:.2f}%")
     print(f"FAR      = {FAR*100:.2f}%")
     print(f"FRR      = {FRR*100:.2f}%")
-    print("===============================================\n")
+    print("====================================\n")
 
-    # Save GLOBAL CSV
-    os.makedirs("logs", exist_ok=True)
-    with open("logs/evaluation_result.csv", "w", newline="", encoding="utf-8") as f:
+    # Save CSV
+    with open(RESULT_CSV, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["Metric", "Value"])
         w.writerow(["TP", TP])
@@ -164,26 +148,33 @@ def evaluate_system():
         w.writerow(["FAR (%)", f"{FAR*100:.2f}"])
         w.writerow(["FRR (%)", f"{FRR*100:.2f}"])
 
-    # Save 5-second window data
-    df = pd.DataFrame(window_results)
-    df.to_csv("logs/Evaluation.csv", index=False)
-    print("[SAVED] Evaluation.csv created ✓")
+    print(f"[SAVED] {RESULT_CSV}")
 
-    # Plot chart
-    plt.figure(figsize=(10, 5))
-    plt.plot(df["time"], df["ACC"], marker='o', label="Accuracy")
-    plt.plot(df["time"], df["FAR"], marker='o', label="FAR")
-    plt.plot(df["time"], df["FRR"], marker='o', label="FRR")
-    plt.grid()
-    plt.xlabel("Time Window (5s)")
-    plt.ylabel("Metric Value")
-    plt.title("FACEID METRICS TREND (5-SECOND WINDOW)")
-    plt.legend()
-    plt.xticks(rotation=45)
+    # ----------------------------------------
+    # Draw 1 Beautiful Chart
+    # ----------------------------------------
+    metrics = ["Accuracy", "FAR", "FRR"]
+    values = [ACC*100, FAR*100, FRR*100]
+
+    plt.figure(figsize=(7, 6))
+    bars = plt.bar(metrics, values, width=0.55)
+
+    for b, val in zip(bars, values):
+        plt.text(b.get_x() + b.get_width()/2, val + 1,
+                 f"{val:.2f}%", ha='center', fontsize=12, fontweight='bold')
+
+    plt.ylabel("Percentage (%)")
+    plt.title("FaceID Evaluation Metrics", fontsize=14)
+    plt.grid(axis='y', linestyle='--', alpha=0.4)
+
     plt.tight_layout()
-    plt.savefig("logs/5s_realtime_trend.png", dpi=300)
-    plt.show()
-    print("[SAVED] logs/5s_realtime_trend.png ✓")
+    plt.savefig(PLOT_PATH, dpi=300)
+    plt.close()
+
+    print(f"[SAVED] {PLOT_PATH}")
+
+    print("\n[✓] EVALUATION COMPLETED\n")
+
 
 if __name__ == "__main__":
     evaluate_system()

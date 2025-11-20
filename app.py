@@ -18,6 +18,10 @@ CONFIG = {
 
 app = Flask(__name__)
 latest = {"status": "idle"}
+
+# GLOBAL FPS
+fps_info = {"last_time": time.time(), "fps": 0.0, "frame_count": 0}
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("faceid")
 warnings.filterwarnings("ignore")
@@ -138,7 +142,11 @@ def detection_worker():
                     last_log[label] = now
                     os.makedirs("logs", exist_ok=True)
                     with open("logs/attendance_log.csv", "a", encoding="utf-8") as log:
-                        log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{label},{conf:.4f}\n")
+                        fps_value = fps_info["fps"]
+                        log.write(
+                            f"{time.strftime('%Y-%m-%d %H:%M:%S')},"
+                            f"{label},{conf:.4f},{fps_value:.2f}\n"
+                        )
                     latest.update({"status": "new", "name": label, "score": f"{conf*100:.1f}%", "time": time.strftime("%H:%M:%S")})
 
 Thread(target=detection_worker, daemon=True).start()
@@ -147,6 +155,23 @@ def generate_frame():
     fid = 0
     while True:
         grabbed, frame = video_capture.read()
+
+        # ==== FPS TRACKING ====
+        fps_info["frame_count"] += 1
+        now = time.time()
+        elapsed = now - fps_info["last_time"]
+
+        # Cập nhật FPS mỗi 1 giây
+        if elapsed >= 1.0:
+            fps_info["fps"] = fps_info["frame_count"] / elapsed
+            fps_info["frame_count"] = 0
+            fps_info["last_time"] = now
+
+        # Vẽ FPS lên frame
+        cv2.putText(frame, f"FPS: {fps_info['fps']:.1f}",
+                    (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                    (0, 255, 80), 2, cv2.LINE_AA)
+        
         if not grabbed or frame is None:
             time.sleep(0.01)
             continue
