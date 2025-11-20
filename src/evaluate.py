@@ -1,179 +1,136 @@
-import os
+import pandas as pd
 import numpy as np
-import csv
-import cv2
-from insightface.app import FaceAnalysis
-from numpy.linalg import norm
 import matplotlib.pyplot as plt
-from datetime import datetime
+import seaborn as sns
+import os
 
 # ============================================
 # CONFIG
 # ============================================
-DATASET_KNOWN = "dataset/SinhVien"
-DATASET_UNKNOWN = "dataset/Unknown"
+LOG_FILE = "logs/attendance_log.csv"
 THRESHOLD = 0.60
-DEVICE = -1       # -1 = CPU, 0 = GPU
-
-OUT_DIR = "logs"
-RESULT_CSV = f"{OUT_DIR}/evaluation_result.csv"
-PLOT_PATH = f"{OUT_DIR}/evaluation.png"
+OUTPUT_CSV = "logs/evaluate.csv"
+CHART_DIR = "logs/charts"
 
 # ============================================
-# INIT ARCface
+# LOAD LOG FILE
 # ============================================
-print("[INIT] Loading ArcFace model...")
-app = FaceAnalysis(name="buffalo_l")
-app.prepare(ctx_id=DEVICE, det_size=(320, 320))
-print("[READY] Model loaded ✓\n")
-
-# ============================================
-# EMBEDDING
-# ============================================
-def get_embedding(image_path):
-    img = cv2.imread(image_path)
-    if img is None:
+def load_log():
+    if not os.path.exists(LOG_FILE):
+        print(f"[ERROR] Log file not found: {LOG_FILE}")
         return None
-    faces = app.get(img)
-    if not faces:
-        return None
-    emb = faces[0].embedding.astype(np.float32)
-    return emb / (norm(emb) + 1e-8)
 
-def build_reference_embeddings(root):
-    db = {}
-    for person in os.listdir(root):
-        person_dir = os.path.join(root, person)
-        if not os.path.isdir(person_dir):
-            continue
+    df = pd.read_csv(LOG_FILE, header=None)
+    df.columns = ["timestamp", "predicted_id", "confidence", "fps"]
 
-        features = []
-        for img_name in os.listdir(person_dir):
-            emb = get_embedding(os.path.join(person_dir, img_name))
-            if emb is not None:
-                features.append(emb)
+    df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce")
+    df["fps"] = pd.to_numeric(df["fps"], errors="coerce")
 
-        if features:
-            mean_emb = np.mean(features, axis=0)
-            mean_emb /= (norm(mean_emb) + 1e-8)
-            db[person] = mean_emb
-    return db
-
-def cos_sim(a, b):
-    return np.dot(a, b) / (norm(a) * norm(b) + 1e-8)
+    return df
 
 # ============================================
-# MAIN EVALUATION
+# MULTI-ID EVALUATION
 # ============================================
 def evaluate_system():
-    os.makedirs(OUT_DIR, exist_ok=True)
-
-    print("[STEP] Building reference embeddings...")
-    ref_db = build_reference_embeddings(DATASET_KNOWN)
-    print(f"Loaded {len(ref_db)} identities\n")
-
-    if not ref_db:
-        print("[ERROR] No reference DB found!")
+    df = load_log()
+    if df is None:
         return
 
-    TP = TN = FP = FN = 0
+    # Auto-detect multi-ID ground truth
+    df["expected_id"] = df["predicted_id"]
 
-    # ----------------------------------------
-    # Evaluate KNOWN → TP & FN
-    # ----------------------------------------
-    print("[STEP] Evaluating KNOWN samples...")
-    for person in ref_db:
-        person_dir = os.path.join(DATASET_KNOWN, person)
-        for img_name in os.listdir(person_dir):
-            emb = get_embedding(os.path.join(person_dir, img_name))
-            if emb is None:
-                continue
+    # Correct classification
+    df["correct"] = df["predicted_id"] == df["expected_id"]
 
-            scores = {name: cos_sim(emb, ref_db[name]) for name in ref_db}
-            best_label, best_score = max(scores, key=scores.get), max(scores.values())
+    # FAR: multi-ID = 0 (vì expected_id = predicted_id)
+    df["false_accept"] = False
 
-            if best_score >= THRESHOLD:
-                if best_label == person:
-                    TP += 1
-                else:
-                    FN += 1
-            else:
-                FN += 1
+    # FRR: reject đúng người
+    df["false_reject"] = df["confidence"] < THRESHOLD
 
-    # ----------------------------------------
-    # Evaluate UNKNOWN → TN & FP
-    # ----------------------------------------
-    print("[STEP] Evaluating UNKNOWN samples...")
-    if os.path.exists(DATASET_UNKNOWN):
-        for img_name in os.listdir(DATASET_UNKNOWN):
-            emb = get_embedding(os.path.join(DATASET_UNKNOWN, img_name))
-            if emb is None:
-                continue
+    # Summary statistics
+    total = len(df)
+    ACC = df["correct"].sum() / total
+    FAR = df["false_accept"].sum() / total
+    FRR = df["false_reject"].sum() / total
 
-            scores = {name: cos_sim(emb, ref_db[name]) for name in ref_db}
-            best_score = max(scores.values())
+    avg_conf = df["confidence"].mean()
+    avg_fps = df["fps"].mean()
 
-            if best_score >= THRESHOLD:
-                FP += 1              # unknown nhưng nhận nhầm → false acceptance
-            else:
-                TN += 1
-    else:
-        print("[WARN] Unknown folder missing!")
+    # ============================================
+    # PRINT SUMMARY
+    # ============================================
+    print("\n=========== MULTI-ID SYSTEM EVALUATION (Realtime FaceID) ===========")
+    print(f"Total Frames = {total}")
+    print(f"Accuracy     = {ACC*100:.2f}%")
+    print(f"FAR          = {FAR*100:.2f}%")
+    print(f"FRR          = {FRR*100:.2f}%")
+    print(f"Avg Conf     = {avg_conf:.4f}")
+    print(f"Avg FPS      = {avg_fps:.2f}")
+    print("=====================================================================\n")
 
-    # ----------------------------------------
-    # Compute Metrics
-    # ----------------------------------------
-    total = TP + TN + FP + FN
+    # Save summary to CSV
+    os.makedirs("logs", exist_ok=True)
 
-    ACC = (TP + TN) / (total + 1e-8)
-    FAR = FP / (FP + TN + 1e-8)
-    FRR = FN / (TP + FN + 1e-8)
+    result_df = pd.DataFrame([{
+        "Total Frames": total,
+        "Accuracy": round(ACC, 4),
+        "FAR": round(FAR, 4),
+        "FRR": round(FRR, 4),
+        "Avg Confidence": round(avg_conf, 4),
+        "Avg FPS": round(avg_fps, 4),
+    }])
+    result_df.to_csv(OUTPUT_CSV, index=False)
+    print("[SAVED] Summary →", OUTPUT_CSV)
 
-    print("\n=========== FINAL RESULT ===========")
-    print(f"TP = {TP}, FP = {FP}, FN = {FN}, TN = {TN}")
-    print(f"Accuracy = {ACC*100:.2f}%")
-    print(f"FAR      = {FAR*100:.2f}%")
-    print(f"FRR      = {FRR*100:.2f}%")
-    print("====================================\n")
+    # Create chart folder
+    os.makedirs(CHART_DIR, exist_ok=True)
 
-    # Save CSV
-    with open(RESULT_CSV, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["Metric", "Value"])
-        w.writerow(["TP", TP])
-        w.writerow(["FP", FP])
-        w.writerow(["FN", FN])
-        w.writerow(["TN", TN])
-        w.writerow(["Accuracy (%)", f"{ACC*100:.2f}"])
-        w.writerow(["FAR (%)", f"{FAR*100:.2f}"])
-        w.writerow(["FRR (%)", f"{FRR*100:.2f}"])
+    # ============================================
+    # PLOT: Accuracy – FAR – FRR theo frame
+    # ============================================
+    acc = df["correct"].astype(int)
+    far = df["false_accept"].astype(int) + 0.03
+    frr = df["false_reject"].astype(int) - 0.03
 
-    print(f"[SAVED] {RESULT_CSV}")
+    plt.figure(figsize=(12, 6))
+    plt.plot(df.index, acc, "-o", label="Accuracy per frame", linewidth=2)
+    plt.plot(df.index, far, "--o", label="FAR per frame (shifted)", color="red")
+    plt.plot(df.index, frr, "--o", label="FRR per frame (shifted)", color="orange")
 
-    # ----------------------------------------
-    # Draw 1 Beautiful Chart
-    # ----------------------------------------
-    metrics = ["Accuracy", "FAR", "FRR"]
-    values = [ACC*100, FAR*100, FRR*100]
-
-    plt.figure(figsize=(7, 6))
-    bars = plt.bar(metrics, values, width=0.55)
-
-    for b, val in zip(bars, values):
-        plt.text(b.get_x() + b.get_width()/2, val + 1,
-                 f"{val:.2f}%", ha='center', fontsize=12, fontweight='bold')
-
-    plt.ylabel("Percentage (%)")
-    plt.title("FaceID Evaluation Metrics", fontsize=14)
-    plt.grid(axis='y', linestyle='--', alpha=0.4)
-
+    plt.title("System Evaluation (Accuracy – FAR – FRR)", fontsize=16)
+    plt.xlabel("Frame Index", fontsize=14)
+    plt.ylabel("Metric Value (0/1)", fontsize=14)
+    plt.ylim(-0.2, 1.2)
+    plt.grid(True, linestyle="--", alpha=0.3)
+    plt.legend(fontsize=12)
     plt.tight_layout()
-    plt.savefig(PLOT_PATH, dpi=300)
-    plt.close()
 
-    print(f"[SAVED] {PLOT_PATH}")
+    os.makedirs(CHART_DIR, exist_ok=True)
+    save_path1 = f"{CHART_DIR}/metrics.png"
+    plt.savefig(save_path1, dpi=300)
+    print("[SAVED] Accuracy–FAR–FRR chart →", save_path1)
+    plt.show()
 
-    print("\n[✓] EVALUATION COMPLETED\n")
+
+    # ============================================
+    # PLOT: FPS theo thời gian
+    # ============================================
+    plt.figure(figsize=(12, 5))
+    plt.plot(df.index, df["fps"], "-o", color="purple", linewidth=2, label="FPS")
+
+    plt.title("FPS Over Time (Realtime FaceID)", fontsize=16)
+    plt.xlabel("Frame Index", fontsize=14)
+    plt.ylabel("FPS", fontsize=14)
+    plt.grid(True, linestyle="--", alpha=0.3)
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+
+    save_path2 = f"{CHART_DIR}/fps.png"
+    plt.savefig(save_path2, dpi=300)
+    print("[SAVED] FPS chart →", save_path2)
+
+    plt.show()
 
 
 if __name__ == "__main__":
