@@ -15,6 +15,7 @@ CONFIG = {
     "LOG_INTERVAL": 5, "EMBEDDINGS_DIR": "encodings/", "DATASET_PATH": "dataset/SinhVien",
     "YOLO_MODEL_PATH": "models/yolov11n-face.pt", "MODEL_NAME": "buffalo_l", "DET_SIZE": (256, 256)
 }
+EXPECTED_ID = "2033225652"   # Thay bằng mssv hiện đang login
 
 app = Flask(__name__)
 latest = {"status": "idle"}
@@ -138,17 +139,38 @@ def detection_worker():
             faces_info = new_faces
             for f in faces_info:
                 label, conf = f["label"], f["conf"]
-                if label != "Unknown" and conf >= CONFIG["RECOG_THRESHOLD"] and now - last_log.get(label, 0) > CONFIG["LOG_INTERVAL"]:
+
+                # if label != "Unknown" and conf >= CONFIG["RECOG_THRESHOLD"] and now - last_log.get(label, 0) > CONFIG["LOG_INTERVAL"]:
+                #     last_log[label] = now
+                #     os.makedirs("logs", exist_ok=True)
+                #     with open("logs/attendance_log.csv", "a", encoding="utf-8") as log:
+                #         fps_value = fps_info["fps"]
+                #         log.write(
+                #             f"{time.strftime('%Y-%m-%d %H:%M:%S')},"
+                #             f"{label},{conf:.4f},{fps_value:.2f}\n"
+                #         )
+                if now - last_log.get(label, 0) > CONFIG["LOG_INTERVAL"]:
                     last_log[label] = now
                     os.makedirs("logs", exist_ok=True)
+
                     with open("logs/attendance_log.csv", "a", encoding="utf-8") as log:
                         fps_value = fps_info["fps"]
                         log.write(
                             f"{time.strftime('%Y-%m-%d %H:%M:%S')},"
-                            f"{label},{conf:.4f},{fps_value:.2f}\n"
+                            f"{EXPECTED_ID},"      # expected_id = người đang đăng nhập
+                            f"{label},"            # predicted_id = kết quả nhận diện
+                            f"{conf:.4f},"
+                            f"{fps_value:.2f}\n"
                         )
-                    latest.update({"status": "new", "name": label, "score": f"{conf*100:.1f}%", "time": time.strftime("%H:%M:%S")})
 
+                    if label != "Unknown":
+                        latest.update({
+                            "status": "new",
+                            "name": label,
+                            "score": f"{conf*100:.1f}%",
+                            "time": time.strftime("%H:%M:%S")
+                        })
+                        
 Thread(target=detection_worker, daemon=True).start()
 
 def generate_frame():
@@ -211,18 +233,6 @@ def attendance_update():
         latest["status"] = "idle"
         return jsonify(payload)
     return jsonify({"status": "idle"})
-
-# def auto_build_and_evaluate():
-#     has_emb = os.path.exists(CONFIG["EMBEDDINGS_DIR"]) and any(
-#         f.endswith("_embedding.pkl") for f in os.listdir(CONFIG["EMBEDDINGS_DIR"])
-#     )
-    
-#     if not has_emb:
-#         logger.info("[AUTO] Building embeddings...")
-#         temp = FaceRecognizer(device=device, db_path=None, embeddings_dir=CONFIG["EMBEDDINGS_DIR"],
-#                              threshold=CONFIG["RECOG_THRESHOLD"], face_app=main_face_app, detector=detector)
-#         temp.build_embeddings(CONFIG["DATASET_PATH"], train_classifier=True)
-#         recognizer._load_db()
 
 if __name__ == "__main__":
     try:

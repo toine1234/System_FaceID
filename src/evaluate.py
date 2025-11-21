@@ -1,135 +1,138 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 import os
 
-# ============================================
-# CONFIG
-# ============================================
 LOG_FILE = "logs/attendance_log.csv"
-THRESHOLD = 0.60
-OUTPUT_CSV = "logs/evaluate.csv"
+OUTPUT_SUMMARY = "logs/evaluate_result.csv"
 CHART_DIR = "logs/charts"
 
-# ============================================
-# LOAD LOG FILE
-# ============================================
+
 def load_log():
     if not os.path.exists(LOG_FILE):
-        print(f"[ERROR] Log file not found: {LOG_FILE}")
+        print("[ERROR] attendance_log.csv NOT FOUND!")
         return None
 
     df = pd.read_csv(LOG_FILE, header=None)
-    df.columns = ["timestamp", "predicted_id", "confidence", "fps"]
+    df.columns = ["timestamp", "expected_id", "predicted_id", "confidence", "fps"]
+
+    df["expected_id"] = df["expected_id"].astype(str)
+    df["predicted_id"] = df["predicted_id"].astype(str)
 
     df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce")
     df["fps"] = pd.to_numeric(df["fps"], errors="coerce")
 
     return df
 
-# ============================================
-# MULTI-ID EVALUATION
-# ============================================
+
 def evaluate_system():
     df = load_log()
     if df is None:
         return
 
-    # Auto-detect multi-ID ground truth
-    df["expected_id"] = df["predicted_id"]
+    # ===== AUTO-DETECT EXPECTED ID =====
+    expected_id = df["expected_id"].mode()[0]
+    print(f"[INFO] Auto-detected expected_id = {expected_id}")
 
-    # Correct classification
-    df["correct"] = df["predicted_id"] == df["expected_id"]
+    # ===== TRUE / FALSE =====
+    df["correct"] = df["predicted_id"] == expected_id
+    df["false_accept"] = (df["predicted_id"] != expected_id) & (df["predicted_id"] != "Unknown")
+    df["false_reject"] = df["predicted_id"] == "Unknown"
 
-    # FAR: multi-ID = 0 (vì expected_id = predicted_id)
-    df["false_accept"] = False
-
-    # FRR: reject đúng người
-    df["false_reject"] = df["confidence"] < THRESHOLD
-
-    # Summary statistics
+    # ===== CONFUSION VALUES =====
+    TP = df["correct"].sum()
+    FP = df["false_accept"].sum()
+    FN = df["false_reject"].sum()
+    TN = len(df) - TP - FP - FN
     total = len(df)
-    ACC = df["correct"].sum() / total
-    FAR = df["false_accept"].sum() / total
-    FRR = df["false_reject"].sum() / total
+
+    # ===== METRICS =====
+    Accuracy = (TP + TN) / total
+    FAR = FP / total
+    FRR = FN / total
 
     avg_conf = df["confidence"].mean()
     avg_fps = df["fps"].mean()
 
-    # ============================================
-    # PRINT SUMMARY
-    # ============================================
-    print("\n=========== MULTI-ID SYSTEM EVALUATION (Realtime FaceID) ===========")
-    print(f"Total Frames = {total}")
-    print(f"Accuracy     = {ACC*100:.2f}%")
-    print(f"FAR          = {FAR*100:.2f}%")
-    print(f"FRR          = {FRR*100:.2f}%")
-    print(f"Avg Conf     = {avg_conf:.4f}")
-    print(f"Avg FPS      = {avg_fps:.2f}")
-    print("=====================================================================\n")
+    # ===== PRINT RESULT =====
+    print("\n========== FACEID EVALUATION SUMMARY ==========")
+    print(f"Expected ID  : {expected_id}")
+    print(f"Total Frames : {total}")
+    print(f"TP           : {TP}")
+    print(f"TN           : {TN}")
+    print(f"FP (FAR)     : {FP}")
+    print(f"FN (FRR)     : {FN}\n")
 
-    # Save summary to CSV
-    os.makedirs("logs", exist_ok=True)
+    print(f"Accuracy     : {Accuracy*100:.2f}%")
+    print(f"FAR          : {FAR*100:.2f}%")
+    print(f"FRR          : {FRR*100:.2f}%")
+    print(f"Avg Confidence: {avg_conf:.4f}")
+    print(f"Avg FPS      : {avg_fps:.2f}")
+    print("================================================\n")
 
-    result_df = pd.DataFrame([{
+    # ===== SAVE CSV =====
+    result = pd.DataFrame([{
+        "Expected ID": expected_id,
         "Total Frames": total,
-        "Accuracy": round(ACC, 4),
+        "TP": TP, "TN": TN, "FP": FP, "FN": FN,
+        "Accuracy": round(Accuracy, 4),
         "FAR": round(FAR, 4),
         "FRR": round(FRR, 4),
         "Avg Confidence": round(avg_conf, 4),
-        "Avg FPS": round(avg_fps, 4),
+        "Avg FPS": round(avg_fps, 2),
     }])
-    result_df.to_csv(OUTPUT_CSV, index=False)
-    print("[SAVED] Summary →", OUTPUT_CSV)
+    result.to_csv(OUTPUT_SUMMARY, index=False)
+    print("[SAVED] Summary →", OUTPUT_SUMMARY)
 
-    # Create chart folder
+    # ==========================================
+    #       PLOT ACCURACY – FAR – FRR
+    # ==========================================
     os.makedirs(CHART_DIR, exist_ok=True)
 
-    # ============================================
-    # PLOT: Accuracy – FAR – FRR theo frame
-    # ============================================
-    acc = df["correct"].astype(int)
-    far = df["false_accept"].astype(int) + 0.03
-    frr = df["false_reject"].astype(int) - 0.03
+    plt.figure(figsize=(8, 6))
 
-    plt.figure(figsize=(12, 6))
-    plt.plot(df.index, acc, "-o", label="Accuracy per frame", linewidth=2)
-    plt.plot(df.index, far, "--o", label="FAR per frame (shifted)", color="red")
-    plt.plot(df.index, frr, "--o", label="FRR per frame (shifted)", color="orange")
+    metrics = ["Accuracy", "FAR", "FRR"]
+    values = [Accuracy, FAR, FRR]
+    colors = ["green", "red", "orange"]
 
-    plt.title("System Evaluation (Accuracy – FAR – FRR)", fontsize=16)
-    plt.xlabel("Frame Index", fontsize=14)
-    plt.ylabel("Metric Value (0/1)", fontsize=14)
-    plt.ylim(-0.2, 1.2)
-    plt.grid(True, linestyle="--", alpha=0.3)
-    plt.legend(fontsize=12)
+    plt.bar(metrics, values, color=colors, alpha=0.85)
+    plt.title("SYSTEM EVALUATION: Accuracy – FAR – FRR")
+    plt.ylabel("Value (0 to 1)")
+    plt.ylim(0, 1)
+    plt.grid(axis="y", linestyle="--", alpha=0.4)
+
+    for i, v in enumerate(values):
+        plt.text(i, v + 0.03, f"{v*100:.2f}%", ha="center", fontsize=12, fontweight="bold")
+
     plt.tight_layout()
-
-    os.makedirs(CHART_DIR, exist_ok=True)
-    save_path1 = f"{CHART_DIR}/metrics.png"
-    plt.savefig(save_path1, dpi=300)
-    print("[SAVED] Accuracy–FAR–FRR chart →", save_path1)
+    plt.savefig(f"{CHART_DIR}/system_evaluation.png", dpi=300)
     plt.show()
 
+    # ===== METRICS CHART PER FRAME =====
+    plt.figure(figsize=(12, 6))
+    plt.plot(df.index, df["correct"].astype(int), "-o", label="Correct (TP)")
+    plt.plot(df.index, df["false_accept"].astype(int), "-o", label="False Accept (FP)", color="red")
+    plt.plot(df.index, df["false_reject"].astype(int), "-o", label="False Reject (FN)", color="orange")
 
-    # ============================================
-    # PLOT: FPS theo thời gian
-    # ============================================
-    plt.figure(figsize=(12, 5))
-    plt.plot(df.index, df["fps"], "-o", color="purple", linewidth=2, label="FPS")
-
-    plt.title("FPS Over Time (Realtime FaceID)", fontsize=16)
-    plt.xlabel("Frame Index", fontsize=14)
-    plt.ylabel("FPS", fontsize=14)
-    plt.grid(True, linestyle="--", alpha=0.3)
-    plt.legend(fontsize=12)
+    plt.title("TP / FP / FN per frame")
+    plt.xlabel("Frame Index")
+    plt.ylabel("Value (0 or 1)")
+    plt.grid(True)
+    plt.legend()
     plt.tight_layout()
+    plt.savefig(f"{CHART_DIR}/metrics.png", dpi=300)
+    plt.show()
 
-    save_path2 = f"{CHART_DIR}/fps.png"
-    plt.savefig(save_path2, dpi=300)
-    print("[SAVED] FPS chart →", save_path2)
-
+    # ===== FPS CHART =====
+    plt.figure(figsize=(12, 5))
+    plt.plot(df.index, df["fps"], "-o", label="FPS", color="purple")
+    plt.title("FPS Over Time")
+    plt.xlabel("Frame Index")
+    plt.ylabel("FPS")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{CHART_DIR}/fps.png", dpi=300)
     plt.show()
 
 
