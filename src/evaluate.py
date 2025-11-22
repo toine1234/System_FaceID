@@ -150,6 +150,21 @@ def evaluate_system():
     # plt.savefig(f"{CHART_DIR}/fps.png", dpi=300)
     # plt.show()
 
+    # ===== METRICS CHART PER FRAME =====
+    # plt.figure(figsize=(12, 6))
+    # plt.plot(df.index, df["correct"].astype(int), "-o", label="Correct (TP)")
+    # plt.plot(df.index, df["false_accept"].astype(int), "-o", label="False Accept (FP)", color="red")
+    # plt.plot(df.index, df["false_reject"].astype(int), "-o", label="False Reject (FN)", color="orange")
+
+    # plt.title("TP / FP / FN per frame")
+    # plt.xlabel("Frame Index")
+    # plt.ylabel("Value (0 or 1)")
+    # plt.grid(True)
+    # plt.legend()
+    # plt.tight_layout()
+    # plt.savefig(f"{CHART_DIR}/metrics.png", dpi=300)
+    # plt.show()
+
 
 if __name__ == "__main__":
     evaluate_system()
