@@ -3,3 +3,4 @@ dataset/
 dataset_WIDER-FACE/
 dataset_detector/
 .env
+.DS_Store
