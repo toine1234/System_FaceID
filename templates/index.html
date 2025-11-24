@@ -303,6 +303,12 @@
             updateStudentInfo(data.name, data.score, data.time);
             // window.location.href = data.redirect
           }
+
+          else if (data.status === "fail") {
+            cameraActive = false
+            cameraImg.src = ""
+            alert(data.msg)
+          }
         } catch (err) {
           console.error("Polling error:", err);
         }

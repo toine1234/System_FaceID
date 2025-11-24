@@ -12,4 +12,5 @@ COPY System_FaceID/requirements.txt ./
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 COPY System_FaceID/. ./
+EXPOSE 5001
 CMD ["python", "app.py"]

@@ -133,7 +133,8 @@ def detection_worker():
                         msg = f"Điểm danh thành công: {label}"
                         try:
                             r = requests.post(os.getenv('URI_API_NODE'), json={"MaSV": label, "MaLop":current_class_id, "ngay_day":curren_date, "status":True}, timeout=3)
-                            print(r)
+                            if r.status_code == 500:
+                                latest.update({"status": "fail", "msg": r.json()["message"]})
                             if r.status_code == 200:
                                 logger.info(f"Điểm danh gửi về Node thành công cho {label}")
                                 latest.update({"status": status, "name": label, "score": f"{conf*100:.1f}%", "time": time.strftime("%H:%M:%S"), "msg": msg,"redirect":os.getenv('URL_REACT')}) 
@@ -231,7 +232,7 @@ if __name__ == "__main__":
     try:
         auto_build_and_evaluate()
         logger.info("[RUNNING] Flask server on port 5001")
-        app.run(debug=False, port=5001, threaded=True)
+        app.run(host="0.0.0.0", debug=False, port=5001, threaded=True)
     except KeyboardInterrupt:
         logger.info("[MAIN] KeyboardInterrupt")
     finally:
