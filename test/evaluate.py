@@ -37,23 +37,21 @@ def evaluate_system():
         return
 
     # ===== AUTO-DETECT EXPECTED ID =====
-    expected_id = df["expected_id"].mode()[0]
-    print(f"[INFO] Auto-detected expected_id = {expected_id}")
+    print("[INFO] Multi-ID Evaluation Mode")
 
     # ===== TRUE / FALSE =====
-    df["correct"] = df["predicted_id"] == expected_id
-    df["false_accept"] = (df["predicted_id"] != expected_id) & (df["predicted_id"] != "Unknown")
+    df["correct"] = (df["predicted_id"] == df["expected_id"]) & (df["expected_id"] != "Unknown")
+    df["false_accept"] = (df["predicted_id"] != df["expected_id"]) & (df["predicted_id"] != "Unknown")
     df["false_reject"] = df["predicted_id"] == "Unknown"
 
     # ===== CONFUSION VALUES =====
     TP = df["correct"].sum()
     FP = df["false_accept"].sum()
     FN = df["false_reject"].sum()
-    TN = len(df) - TP - FP - FN
     total = len(df)
 
     # ===== METRICS =====
-    Accuracy = (TP + TN) / total
+    Accuracy = TP / total
     FAR = FP / total
     FRR = FN / total
 
@@ -67,10 +65,9 @@ def evaluate_system():
 
     # ===== PRINT RESULT =====
     print("\n========== FACEID EVALUATION SUMMARY ==========")
-    print(f"Expected ID  : {expected_id}")
+    print("Expected ID  : MULTI-CLASS MODE")
     print(f"Total Frames : {total}")
     print(f"TP           : {TP}")
-    print(f"TN           : {TN}")
     print(f"FP (FAR)     : {FP}")
     print(f"FN (FRR)     : {FN}\n")
 
@@ -87,9 +84,9 @@ def evaluate_system():
 
     # ===== SAVE CSV =====
     result = pd.DataFrame([{
-        "Expected ID": expected_id,
+        "Expected ID": "MULTI-CLASS MODE",
         "Total Frames": total,
-        "TP": TP, "TN": TN, "FP": FP, "FN": FN,
+        "TP": TP, "FP": FP, "FN": FN,
         "Accuracy": round(Accuracy, 4),
         "FAR": round(FAR, 4),
         "FRR": round(FRR, 4),
