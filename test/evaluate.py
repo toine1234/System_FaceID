@@ -97,6 +97,7 @@ def evaluate_system():
     print(f"Total Frames : {total}")
     print(f"TP           : {TP}")
     print(f"FP (FAR)     : {FP}")
+    print(f"TN           : {FP}")
     print(f"FN (FRR)     : {FN}\n")
 
     print(f"Accuracy     : {Accuracy*100:.2f}%")
