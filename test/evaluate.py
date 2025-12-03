@@ -39,29 +39,57 @@ def evaluate_system():
     # ===== AUTO-DETECT EXPECTED ID =====
     print("[INFO] Multi-ID Evaluation Mode")
 
-    # ===== TRUE / FALSE =====
-    df["correct"] = (df["predicted_id"] == df["expected_id"]) & (df["expected_id"] != "Unknown")
-    df["false_accept"] = (df["predicted_id"] != df["expected_id"]) & (df["predicted_id"] != "Unknown")
-    df["false_reject"] = df["predicted_id"] == "Unknown"
+    # # ===== TRUE / FALSE =====
+    # df["correct"] = (df["predicted_id"] == df["expected_id"]) & (df["expected_id"] != "Unknown")
+    # df["false_accept"] = (df["predicted_id"] != df["expected_id"]) & (df["predicted_id"] != "Unknown")
+    # df["false_reject"] = df["predicted_id"] == "Unknown"
 
-    # ===== CONFUSION VALUES =====
-    TP = df["correct"].sum()
-    FP = df["false_accept"].sum()
-    FN = df["false_reject"].sum()
-    total = len(df)
+    # # ===== CONFUSION VALUES =====
+    # TP = df["correct"].sum()
+    # FP = df["false_accept"].sum()
+    # FN = df["false_reject"].sum()
+    # total = len(df)
 
-    # ===== METRICS =====
-    Accuracy = TP / total
-    FAR = FP / total
-    FRR = FN / total
+    # # ===== METRICS =====
+    # Accuracy = TP / total
+    # FAR = FP / total
+    # FRR = FN / total
 
-    avg_conf = df["confidence"].mean()
-    avg_fps = df["fps"].mean()
+    # avg_conf = df["confidence"].mean()
+    # avg_fps = df["fps"].mean()
 
-    # ===== PRECISION & RECALL =====
+    # # ===== PRECISION & RECALL =====
+    # Precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+    # Recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+
+    df["TP"] = (df["expected_id"] != "Impostor") & \
+           (df["expected_id"] != "Unknown") & \
+           (df["predicted_id"] == df["expected_id"])
+
+    df["FP"] = (df["expected_id"] == "Impostor") & \
+            (df["predicted_id"] != "Unknown")
+
+    df["TN"] = (df["expected_id"] == "Impostor") & \
+            (df["predicted_id"] == "Unknown")
+
+    df["FN"] = (df["expected_id"] != "Impostor") & \
+            (df["predicted_id"] == "Unknown")
+    
+    TP = df["TP"].sum()
+    FP = df["FP"].sum()
+    TN = df["TN"].sum()
+    FN = df["FN"].sum()
+
+    total = TP + FP + TN + FN
+
+    Accuracy  = (TP + TN) / total
+    FAR = FP / (FP + TN) if (FP + TN) > 0 else 0
+    FRR = FN / (TP + FN) if (TP + FN) > 0 else 0
     Precision = TP / (TP + FP) if (TP + FP) > 0 else 0
     Recall = TP / (TP + FN) if (TP + FN) > 0 else 0
 
+    avg_conf = df["confidence"].mean()
+    avg_fps = df["fps"].mean()
 
     # ===== PRINT RESULT =====
     print("\n========== FACEID EVALUATION SUMMARY ==========")
